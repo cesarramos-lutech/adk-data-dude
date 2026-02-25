@@ -1,73 +1,51 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ComponentsProvider } from '@looker/components-providers';
-import { Box, ThemeProvider, createTheme, CssBaseline } from '@mui/material';
+import React, { useMemo } from 'react';
+import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
+import { AppThemeProvider } from './context/ThemeContext';
+import { SessionProvider } from './context/SessionContext';
+import { StoryProvider } from './context/StoryContext';
 import TopBanner from './components/TopBanner';
-import { AppThemeProvider, useAppTheme } from './context/ThemeContext';
+import ChatPanel from './components/ChatPanel';
+import StoryPanel from './components/StoryPanel';
+import Pinboard from './components/Pinboard';
+import { GlobalToast } from './components/GlobalToast';
+import { useStory } from './context/StoryContext';
 import './App.css';
 
-import ChatPanel from './components/ChatPanel';
-import { SidePanel } from './components/SidePanel';
-import { SessionProvider } from './context/SessionContext';
-import RightPanel from './components/RightPanel';
-import { GlobalToast } from './components/GlobalToast';
+const CanvasLayout: React.FC = () => {
+  const { pinnedCards } = useStory();
+  const hasPins = pinnedCards.length > 0;
 
-const AppContent = () => {
-  const { themeMode, customTheme } = useAppTheme();
-  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  return (
+    <div className="App" data-theme="dark">
+      <div className="canvas-layout">
+        <TopBanner />
+        <div className={`canvas-panels ${hasPins ? 'canvas-panels--with-pins' : ''}`}>
+          <ChatPanel />
+          <StoryPanel />
+          <Pinboard />
+        </div>
+      </div>
+      <GlobalToast />
+    </div>
+  );
+};
 
-useEffect(() => {
-    const root = document.documentElement;
-    if (themeMode === 'custom') {
-      root.style.setProperty('--bg-default', customTheme.bgColor);
-      root.style.setProperty('--bg-paper', '#ffffff');
-      
-      root.style.setProperty('--font-family', `"${customTheme.fontFamily}", "Google Sans", Roboto, Arial, sans-serif`);
-    } else {
-      root.style.removeProperty('--bg-default');
-      root.style.removeProperty('--bg-paper');
-      root.style.removeProperty('--font-family');
-    }
-  }, [themeMode, customTheme]);
-
-  // MUI Theme Setup
+const AppContent: React.FC = () => {
   const muiTheme = useMemo(() => createTheme({
     palette: {
-      mode: themeMode === 'dark' ? 'dark' : 'light',
-      primary: { main: '#1976d2' },
+      mode: 'dark',
+      primary: { main: '#3b82f6' },
+      background: { default: '#0f172a', paper: '#1e293b' },
     },
     typography: {
-      fontFamily: themeMode === 'custom' 
-        ? `"${customTheme.fontFamily}", "Google Sans", Roboto, Arial, sans-serif`
-        : '"Google Sans", Roboto, Arial, sans-serif',
-    }
-  }), [themeMode, customTheme]);
+      fontFamily: '"DM Sans", "Google Sans", Roboto, Arial, sans-serif',
+    },
+  }), []);
 
   return (
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
-      <ComponentsProvider>
-        <div className="App" data-theme={themeMode}>
-          <Box className="app-layout" sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-            <TopBanner />
-            <Box sx={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
-              <SidePanel />
-              <Box sx={{ flexGrow: 1, height: '100%', overflow: 'hidden', position: 'relative' }}>
-                <ChatPanel 
-                  onToggleRightPanel={() => setIsInspectorOpen(!isInspectorOpen)}                
-                />
-              </Box>
-              <RightPanel 
-                isOpen={isInspectorOpen} 
-                onClose={() => setIsInspectorOpen(false)} 
-              />
-            </Box>
-          </Box>
-          
-          {/* 2. Add GlobalToast here, inside the theme/component providers but outside layout boxes */}
-          <GlobalToast />
-          
-        </div>
-      </ComponentsProvider>
+      <CanvasLayout />
     </ThemeProvider>
   );
 };
@@ -75,9 +53,11 @@ useEffect(() => {
 function App() {
   return (
     <AppThemeProvider>
-      <SessionProvider>
-         <AppContent />
-      </SessionProvider>
+      <StoryProvider>
+        <SessionProvider>
+          <AppContent />
+        </SessionProvider>
+      </StoryProvider>
     </AppThemeProvider>
   );
 }

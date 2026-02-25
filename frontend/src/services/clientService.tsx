@@ -30,7 +30,51 @@ function formatErrorDetail(detail: unknown): string {
     return String(detail);
 }
 
-const handleStreamingResponse = async (response: Response, onChunk?: (text: string) => void) => {
+export interface StreamCallbacks {
+    onChunk?: (text: string) => void;
+    onChartSpec?: (spec: Record<string, unknown>) => void;
+    onStatus?: (status: string) => void;
+}
+
+function isVegaLiteSpec(obj: unknown): obj is Record<string, unknown> {
+    if (typeof obj !== 'object' || obj === null) return false;
+    const rec = obj as Record<string, unknown>;
+    return (
+        (typeof rec.$schema === 'string' && rec.$schema.includes('vega-lite')) ||
+        ('mark' in rec && ('encoding' in rec || 'data' in rec))
+    );
+}
+
+function tryExtractChartSpec(data: any, callbacks?: StreamCallbacks): void {
+    try {
+        const parts = data?.content?.parts ?? data?.parts ?? [];
+        for (const part of parts) {
+            if (part?.functionResponse) {
+                const respData = part.functionResponse.response;
+                if (typeof respData === 'string') {
+                    try {
+                        const parsed = JSON.parse(respData);
+                        if (isVegaLiteSpec(parsed)) {
+                            callbacks?.onChartSpec?.(parsed);
+                        }
+                    } catch { /* not JSON */ }
+                } else if (isVegaLiteSpec(respData)) {
+                    callbacks?.onChartSpec?.(respData);
+                }
+            }
+            if (part?.functionCall?.name) {
+                const toolName = part.functionCall.name;
+                if (toolName === 'bigquery_nl2sql') callbacks?.onStatus?.('Generating SQL…');
+                else if (toolName === 'execute_sql') callbacks?.onStatus?.('Querying BigQuery…');
+                else if (toolName === 'build_dashboard') callbacks?.onStatus?.('Building visualization…');
+                else if (toolName === 'get_recommendations') callbacks?.onStatus?.('Generating recommendations…');
+                else callbacks?.onStatus?.(`Calling ${toolName}…`);
+            }
+        }
+    } catch { /* ignore extraction errors */ }
+}
+
+const handleStreamingResponse = async (response: Response, callbacks?: StreamCallbacks) => {
     if (!response.ok) {
         let errorMessage = `HTTP Error: ${response.status}`;
         const text = await response.text();
@@ -43,7 +87,6 @@ const handleStreamingResponse = async (response: Response, onChunk?: (text: stri
                 errorMessage = text;
             }
         }
-        // Show first line or first 300 chars so user sees the real cause (e.g. missing env var)
         const toastMsg = errorMessage.includes('\n')
             ? errorMessage.split('\n')[0].trim()
             : errorMessage.slice(0, 300);
@@ -85,8 +128,10 @@ const handleStreamingResponse = async (response: Response, onChunk?: (text: stri
 
                 try {
                     const data = JSON.parse(jsonStr);
-                    let newText = "";
 
+                    tryExtractChartSpec(data, callbacks);
+
+                    let newText = "";
                     if (data?.content?.parts?.[0]?.text) {
                         newText = data.content.parts[0].text;
                     } else if (data?.parts?.[0]?.text) {
@@ -95,7 +140,7 @@ const handleStreamingResponse = async (response: Response, onChunk?: (text: stri
 
                     if (newText) {
                         fullText += newText;
-                        if (onChunk) onChunk(newText);
+                        callbacks?.onChunk?.(newText);
                     }
                 } catch (e) {
                     console.warn("Stream parse error", e);
@@ -104,6 +149,7 @@ const handleStreamingResponse = async (response: Response, onChunk?: (text: stri
         }
     }
     
+    callbacks?.onStatus?.('idle');
     return { parts: [{ text: fullText }] };
 };
 
@@ -123,14 +169,16 @@ export const apiClient = {
         }
     },
 
-    post: async <T = any>(endpoint: string, body: any = {}, onChunk?: (text: string) => void): Promise<T> => {
+    post: async <T = any>(endpoint: string, body: any = {}, callbacks?: StreamCallbacks | ((text: string) => void)): Promise<T> => {
+        const normalizedCallbacks: StreamCallbacks | undefined =
+            typeof callbacks === 'function' ? { onChunk: callbacks } : callbacks;
         try {
             const response = await fetch(`/api${endpoint}`, {
                 method: 'POST',
                 headers: getHeaders(),
                 body: JSON.stringify(body),
             });
-            return await handleStreamingResponse(response, onChunk);
+            return await handleStreamingResponse(response, normalizedCallbacks);
         } catch (error: any) {
             const msg = error.message || "Network error.";
             if (!msg.includes("HTTP Error")) {
@@ -180,7 +228,7 @@ export const chatService = {
         text: string, 
         sessionId: string, 
         files: any[] = [], 
-        onChunk?: (text: string) => void
+        callbacks?: StreamCallbacks | ((text: string) => void)
     ) => {
         const parts: any[] = [];
         if (text && text.trim().length > 0) parts.push({ text: text });
@@ -234,6 +282,6 @@ export const chatService = {
             stateDelta: null
         };
 
-        return await apiClient.post('/run_sse', payload, onChunk);
+        return await apiClient.post('/run_sse', payload, callbacks);
     }
 };

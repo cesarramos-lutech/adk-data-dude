@@ -31,3 +31,14 @@ export type AgentStatus =
   | 'querying'
   | 'visualizing'
   | 'error';
+
+/** PRD: POST /api/chat response insight shape */
+export interface ApiInsight {
+  title: string;
+  sql_query: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  suggested_chart_type?: string;
+  x_axis_key?: string;
+  y_axis_key?: string;
+}

@@ -1,7 +1,9 @@
-/// <reference types="vite/client" />
 import { toastManager } from '../utils/ToastManager';
 
-const BASE_URL = import.meta.env.VITE_ADK_API_BASE_URL;
+const BASE_URL =
+    typeof process !== 'undefined'
+        ? process.env.NEXT_PUBLIC_ADK_API_BASE_URL ?? 'http://localhost:8081'
+        : 'http://localhost:8081';
 console.log(`API Service Initialized using Base URL: ${BASE_URL}`);
 
 // --- Helpers ---

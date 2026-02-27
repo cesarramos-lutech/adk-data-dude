@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --chat-bg: #0f1419;
+  --canvas-bg: #1a1f26;
+  --border: #2d3748;
+  --user-bubble: #2b6cb0;
+  --agent-bubble: #2d3748;
+  --text: #e2e8f0;
+  --text-muted: #a0aec0;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Recharts container */
+.recharts-wrapper {
+  width: 100% !important;
+}
+.recharts-surface {
+  overflow: visible;
+}

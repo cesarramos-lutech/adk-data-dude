@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState, useEffect } from 'react';
 import { Snackbar, Button, IconButton } from '@mui/material';
 import { Close as CloseIcon } from '@mui/icons-material';

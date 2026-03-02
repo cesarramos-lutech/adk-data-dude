@@ -5,8 +5,28 @@ import { useCopilotStore } from '@/src/store/copilotStore';
 import { ActiveInsightView } from './ActiveInsightView';
 import { MyBoardView } from './MyBoardView';
 
+const phaseLabels: Record<string, string> = {
+  thinking: 'Understanding',
+  querying: 'Querying',
+  visualizing: 'Visualizing',
+  finalizing: 'Finalizing',
+};
+
+const responseTypeLabels: Record<string, string> = {
+  message_only: 'Message only',
+  insight_partial: 'Partial insight',
+  insight_ready: 'Insight ready',
+  error: 'Error',
+};
+
+function formatElapsed(ms?: number): string {
+  if (!ms || ms <= 0) return '';
+  const s = Math.round(ms / 1000);
+  return `${s}s`;
+}
+
 export function CanvasPane() {
-  const { mainMode, setMainMode, currentInsight } = useCopilotStore();
+  const { mainMode, setMainMode, statusPhase, lastResponseType, uiHints, lastMeta } = useCopilotStore();
 
   return (
     <>
@@ -35,6 +55,28 @@ export function CanvasPane() {
           <LayoutGrid className="w-4 h-4" />
           My Board
         </button>
+        <div className="ml-auto flex items-center gap-2">
+          {statusPhase && (
+            <span className="text-xs rounded-full bg-white/10 px-2 py-1 text-[var(--text-muted)] capitalize">
+              {phaseLabels[statusPhase] ?? statusPhase}
+            </span>
+          )}
+          {lastResponseType && (
+            <span className="text-xs rounded-full bg-white/5 px-2 py-1 text-[var(--text-muted)]">
+              {responseTypeLabels[lastResponseType] ?? lastResponseType}
+            </span>
+          )}
+          {uiHints?.confidence && (
+            <span className="text-xs rounded-full bg-blue-900/20 px-2 py-1 text-blue-300">
+              {uiHints.confidence} confidence
+            </span>
+          )}
+          {lastMeta?.elapsed_ms ? (
+            <span className="text-xs rounded-full bg-white/5 px-2 py-1 text-[var(--text-muted)]">
+              {formatElapsed(lastMeta.elapsed_ms)}
+            </span>
+          ) : null}
+        </div>
       </header>
 
       <div className="flex-1 overflow-hidden min-h-0">

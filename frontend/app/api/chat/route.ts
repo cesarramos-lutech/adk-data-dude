@@ -1,15 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { ApiInsight } from '@/src/types/insight';
+import type {
+  ApiInsight,
+  ResponseMeta,
+  ResponseType,
+  StatusPhase,
+  UiHints,
+} from '@/src/types/insight';
 
 export const runtime = 'nodejs';
 
 type HistoryItem = { role?: string; content?: string };
 type ChatRequest = { prompt?: string; history?: HistoryItem[] };
 type SessionState = { appName: string; sessionId: string; updatedAt: number };
+type CandidateSource = 'tool_response' | 'state_delta';
+type InsightCandidate = {
+  source: CandidateSource;
+  payload: unknown;
+};
 
 const sessionsByBrowser = new Map<string, SessionState>();
 const BROWSER_COOKIE = 'copilot_browser_id';
 const USER_ID = 'user';
+const PINNED_APP_NAME = process.env.ADK_APP_NAME?.trim();
 
 const ADK_BASE_URL = (
   process.env.ADK_API_BASE_URL ??
@@ -35,29 +47,31 @@ function getTextFromParts(container: unknown): string[] {
   return out;
 }
 
-function walkJson(root: unknown, visit: (node: unknown) => void): void {
-  const stack: unknown[] = [root];
-  const seen = new Set<unknown>();
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (node == null || seen.has(node)) continue;
-    seen.add(node);
-    visit(node);
-    if (Array.isArray(node)) {
-      for (const v of node) stack.push(v);
-    } else if (typeof node === 'object') {
-      for (const v of Object.values(node as Record<string, unknown>)) stack.push(v);
-    }
+function parseJsonStringMaybe(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
   }
 }
 
-function extractAgentText(raw: unknown): string {
-  const chunks: string[] = [];
-  walkJson(raw, (node) => {
-    chunks.push(...getTextFromParts(node));
-  });
-  const joined = chunks.join('\n').trim();
-  return joined || 'The agent responded without readable text.';
+function normalizeEvents(raw: unknown): Record<string, unknown>[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((v): v is Record<string, unknown> => !!v && typeof v === 'object');
+  }
+  if (raw && typeof raw === 'object') return [raw as Record<string, unknown>];
+  return [];
+}
+
+function extractAgentText(events: Record<string, unknown>[]): string {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const texts = getTextFromParts((events[i] as Record<string, unknown>).content);
+    if (texts.length > 0) return texts.join('\n').trim();
+  }
+  return 'The agent responded without readable text.';
 }
 
 function extractSql(text: string): string {
@@ -73,22 +87,100 @@ function isScalar(value: unknown): boolean {
   return value == null || ['string', 'number', 'boolean'].includes(typeof value);
 }
 
-function extractRows(raw: unknown): Record<string, unknown>[] {
-  let best: Record<string, unknown>[] = [];
-  walkJson(raw, (node) => {
-    if (!Array.isArray(node) || node.length === 0) return;
-    const array = node as unknown[];
-    if (!array.every((item) => item && typeof item === 'object' && !Array.isArray(item))) return;
-    const typed = array as Record<string, unknown>[];
-    const keys = Object.keys(typed[0] ?? {});
-    if (keys.length === 0) return;
-    // Ignore chat-like arrays [{role,content}]
-    if (keys.length <= 2 && keys.includes('role') && keys.includes('content')) return;
-    const allScalar = typed.every((row) => Object.values(row).every(isScalar));
-    if (!allScalar) return;
-    if (typed.length > best.length) best = typed;
-  });
-  return best;
+function normalizeRows(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value) || value.length === 0) return [];
+  if (!value.every((item) => item && typeof item === 'object' && !Array.isArray(item))) return [];
+  const rows = value as Record<string, unknown>[];
+  const allScalar = rows.every((row) => Object.values(row).every(isScalar));
+  return allScalar ? rows : [];
+}
+
+function extractRowsFromPayload(payload: unknown): Record<string, unknown>[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const rec = payload as Record<string, unknown>;
+
+  const directRows = normalizeRows(rec.rows);
+  if (directRows.length > 0) return directRows;
+
+  const dataRows = normalizeRows(rec.data);
+  if (dataRows.length > 0) return dataRows;
+
+  const queryRows = normalizeRows(rec.query_result);
+  if (queryRows.length > 0) return queryRows;
+
+  const bqRows = normalizeRows(rec.bigquery_query_result);
+  if (bqRows.length > 0) return bqRows;
+
+  return normalizeRows(payload);
+}
+
+function extractSqlFromPayload(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const rec = payload as Record<string, unknown>;
+  const value = rec.sql_query ?? rec.sql ?? rec.query ?? rec.generated_sql;
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function extractColumnsFromPayload(payload: unknown): string[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const rec = payload as Record<string, unknown>;
+  if (Array.isArray(rec.columns) && rec.columns.every((c) => typeof c === 'string')) {
+    return rec.columns as string[];
+  }
+  return [];
+}
+
+function extractCandidates(events: Record<string, unknown>[]): InsightCandidate[] {
+  const candidates: InsightCandidate[] = [];
+  for (const event of events) {
+    const content = event.content as Record<string, unknown> | undefined;
+    const parts = Array.isArray(content?.parts) ? content.parts : [];
+    for (const part of parts) {
+      if (!part || typeof part !== 'object') continue;
+      const p = part as Record<string, unknown>;
+      const fr = p.functionResponse as Record<string, unknown> | undefined;
+      if (fr?.response !== undefined) {
+        candidates.push({
+          source: 'tool_response',
+          payload: parseJsonStringMaybe(fr.response),
+        });
+      }
+    }
+
+    const actions = event.actions as Record<string, unknown> | undefined;
+    const stateDelta = actions?.stateDelta;
+    if (!stateDelta || typeof stateDelta !== 'object') continue;
+
+    const delta = stateDelta as Record<string, unknown>;
+    const knownKeys = [
+      'bigquery_query_result',
+      'query_result',
+      'insight',
+      'insight_data',
+      'dashboard_data',
+      'dashboard_result',
+      'result_rows',
+    ];
+    for (const key of knownKeys) {
+      if (delta[key] !== undefined) {
+        candidates.push({
+          source: 'state_delta',
+          payload: parseJsonStringMaybe(delta[key]),
+        });
+      }
+    }
+
+    const sqlKeys = ['sql_query', 'generated_sql', 'sql'];
+    for (const key of sqlKeys) {
+      if (typeof delta[key] === 'string' && (delta[key] as string).trim()) {
+        candidates.push({
+          source: 'state_delta',
+          payload: { sql_query: (delta[key] as string).trim() },
+        });
+      }
+    }
+  }
+  return candidates;
 }
 
 function firstSentence(text: string): string {
@@ -96,6 +188,61 @@ function firstSentence(text: string): string {
   const idx = clean.search(/[.!?](\s|$)/);
   if (idx > 0) return clean.slice(0, idx + 1).trim();
   return clean.slice(0, 80).trim();
+}
+
+function sanitizeTitle(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (!compact) return '';
+  const stripped = compact
+    .replace(/^here are (the )?(key )?(insights|findings)[:\s-]*/i, '')
+    .replace(/^based on your question[:,\s-]*/i, '')
+    .replace(/^for your question[:,\s-]*/i, '')
+    .trim();
+  if (!stripped) return '';
+  return stripped.length > 96 ? `${stripped.slice(0, 96).trim()}...` : stripped;
+}
+
+function extractTitleFromPayload(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const rec = payload as Record<string, unknown>;
+  const value =
+    rec.insight_title ??
+    rec.title ??
+    rec.headline ??
+    rec.summary_title ??
+    rec.card_title;
+  if (typeof value !== 'string') return '';
+  return sanitizeTitle(value);
+}
+
+function extractNarrativeFromPayload(payload: unknown): {
+  insight_summary?: string;
+  key_points?: string[];
+  recommended_actions?: string[];
+} {
+  if (!payload || typeof payload !== 'object') return {};
+  const rec = payload as Record<string, unknown>;
+
+  const summaryRaw = rec.insight_summary ?? rec.summary ?? rec.narrative ?? rec.analysis;
+  const insight_summary = typeof summaryRaw === 'string' ? summaryRaw.trim() : undefined;
+
+  const toStringArray = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) return undefined;
+    const list = value.filter((v): v is string => typeof v === 'string').map((v) => v.trim()).filter(Boolean);
+    return list.length > 0 ? list : undefined;
+  };
+
+  const key_points =
+    toStringArray(rec.key_points) ??
+    toStringArray(rec.takeaways) ??
+    toStringArray(rec.findings);
+
+  const recommended_actions =
+    toStringArray(rec.recommended_actions) ??
+    toStringArray(rec.next_actions) ??
+    toStringArray(rec.recommendations);
+
+  return { insight_summary, key_points, recommended_actions };
 }
 
 function inferChartType(columns: string[], rows: Record<string, unknown>[]): string {
@@ -115,22 +262,113 @@ function inferAxes(columns: string[], rows: Record<string, unknown>[]): { x?: st
   };
 }
 
-function buildInsight(prompt: string, text: string, raw: unknown): ApiInsight {
-  const rows = extractRows(raw);
-  const columns = rows.length > 0
-    ? Object.keys(rows[0] ?? {})
-    : ['label', 'value'];
+function buildInsightFromCandidate(
+  prompt: string,
+  text: string,
+  candidate: InsightCandidate | null
+): { insight: ApiInsight | null; confidence: UiHints['confidence'] } {
+  const defaultTitle = sanitizeTitle(firstSentence(text)) || 'Generated insight';
+  const fallbackSql = extractSql(text);
+
+  if (!candidate) {
+    if (!fallbackSql) return { insight: null, confidence: 'low' };
+    return {
+      insight: {
+        title: defaultTitle,
+        sql_query: fallbackSql,
+        columns: [],
+        rows: [],
+        suggested_chart_type: 'table',
+        insight_summary: text.trim() || undefined,
+        visualization_mode: 'narrative',
+      },
+      confidence: 'low',
+    };
+  }
+
+  const rows = extractRowsFromPayload(candidate.payload);
+  const payloadColumns = extractColumnsFromPayload(candidate.payload);
+  const columns = payloadColumns.length > 0 ? payloadColumns : Object.keys(rows[0] ?? {});
+  const sql = extractSqlFromPayload(candidate.payload) || fallbackSql;
+  const payloadTitle = extractTitleFromPayload(candidate.payload);
+  const narrative = extractNarrativeFromPayload(candidate.payload);
   const axes = inferAxes(columns, rows);
-  const sql = extractSql(text);
+  const confidence: UiHints['confidence'] =
+    candidate.source === 'tool_response' ? 'high' : 'medium';
+  const title = payloadTitle || defaultTitle;
+  const hasNarrative = !!narrative.insight_summary || !!text.trim();
+  const visualization_mode = rows.length === 0 && hasNarrative ? 'narrative' : 'chart';
 
   return {
-    title: firstSentence(text) || `Insight for: ${prompt.slice(0, 48)}`,
-    sql_query: sql,
-    columns,
-    rows,
-    suggested_chart_type: inferChartType(columns, rows),
-    x_axis_key: axes.x,
-    y_axis_key: axes.y,
+    insight: {
+      title,
+      sql_query: sql,
+      columns,
+      rows,
+      suggested_chart_type: inferChartType(columns, rows),
+      x_axis_key: axes.x,
+      y_axis_key: axes.y,
+      insight_summary: narrative.insight_summary ?? (text.trim() ? text.trim().slice(0, 500) : undefined),
+      key_points: narrative.key_points,
+      recommended_actions: narrative.recommended_actions,
+      visualization_mode,
+    },
+    confidence,
+  };
+}
+
+function scoreCandidate(candidate: InsightCandidate): number {
+  const rows = extractRowsFromPayload(candidate.payload);
+  const sql = extractSqlFromPayload(candidate.payload);
+  return (rows.length > 0 ? 10 : 0) + (sql ? 2 : 0) + (candidate.source === 'tool_response' ? 3 : 1);
+}
+
+function selectBestCandidate(candidates: InsightCandidate[]): InsightCandidate | null {
+  if (candidates.length === 0) return null;
+  let best = candidates[0];
+  let bestScore = scoreCandidate(best);
+  for (const candidate of candidates.slice(1)) {
+    const score = scoreCandidate(candidate);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function phaseFromTool(toolName: string): StatusPhase {
+  const lower = toolName.toLowerCase();
+  if (lower.includes('sql') || lower.includes('query') || lower.includes('bigquery')) return 'querying';
+  if (lower.includes('chart') || lower.includes('dashboard') || lower.includes('visual')) return 'visualizing';
+  return 'thinking';
+}
+
+function extractPhaseTrace(events: Record<string, unknown>[]): StatusPhase[] {
+  const phases: StatusPhase[] = [];
+  const pushUnique = (phase: StatusPhase) => {
+    if (phases[phases.length - 1] !== phase) phases.push(phase);
+  };
+
+  pushUnique('thinking');
+  for (const event of events) {
+    const content = event.content as Record<string, unknown> | undefined;
+    const parts = Array.isArray(content?.parts) ? content.parts : [];
+    for (const part of parts) {
+      if (!part || typeof part !== 'object') continue;
+      const fc = (part as Record<string, unknown>).functionCall as Record<string, unknown> | undefined;
+      if (typeof fc?.name === 'string') pushUnique(phaseFromTool(fc.name));
+    }
+  }
+  pushUnique('finalizing');
+  return phases;
+}
+
+function buildUiHints(responseType: ResponseType, confidence: UiHints['confidence']): UiHints {
+  return {
+    auto_open_insight: responseType === 'insight_ready' && confidence !== 'low',
+    pin_allowed: responseType === 'insight_ready',
+    confidence,
   };
 }
 
@@ -173,10 +411,15 @@ async function adkFetch(path: string, init?: RequestInit): Promise<Response> {
 }
 
 async function getDefaultAppName(): Promise<string> {
+  if (PINNED_APP_NAME) return PINNED_APP_NAME;
   const listRes = await adkFetch('/list-apps', { method: 'GET' });
   if (!listRes.ok) return 'dashboard_agent';
   const payload = await parseAdkResponse(listRes);
-  if (Array.isArray(payload) && typeof payload[0] === 'string') return payload[0];
+  if (Array.isArray(payload)) {
+    const names = payload.filter((v): v is string => typeof v === 'string');
+    if (names.includes('dashboard_agent')) return 'dashboard_agent';
+    if (names.length > 0) return names[0];
+  }
   return 'dashboard_agent';
 }
 
@@ -209,12 +452,31 @@ async function getOrCreateSession(browserId: string): Promise<SessionState> {
 
 export async function POST(request: NextRequest) {
   let createdBrowserId: string | null = null;
+  const requestId = crypto.randomUUID();
+  const start = Date.now();
   try {
     const body = (await request.json()) as ChatRequest;
     const prompt = (body.prompt ?? '').trim();
     if (!prompt) {
       return NextResponse.json(
-        { status: 'error', error: 'Prompt is required.' },
+        {
+          status: 'error',
+          response_type: 'error',
+          error: 'Prompt is required.',
+          status_phase: 'finalizing',
+          phase_trace: ['thinking', 'finalizing'],
+          ui_hints: {
+            auto_open_insight: false,
+            pin_allowed: false,
+            confidence: 'low',
+          },
+          meta: {
+            request_id: requestId,
+            elapsed_ms: Date.now() - start,
+            app_name: PINNED_APP_NAME ?? 'dashboard_agent',
+            session_id: '',
+          },
+        },
         { status: 400 }
       );
     }
@@ -250,13 +512,35 @@ export async function POST(request: NextRequest) {
     }
 
     const adkPayload = await parseAdkResponse(runRes);
-    const agentMessage = extractAgentText(adkPayload);
-    const insight = buildInsight(prompt, agentMessage, adkPayload);
+    const events = normalizeEvents(adkPayload);
+    const phaseTrace = extractPhaseTrace(events);
+    const agentMessage = extractAgentText(events);
+    const bestCandidate = selectBestCandidate(extractCandidates(events));
+    const { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate);
+    const hasNarrative = !!insight?.insight_summary || (insight?.key_points?.length ?? 0) > 0;
+    const responseType: ResponseType =
+      !insight
+        ? 'message_only'
+        : insight.rows.length > 0 || hasNarrative
+          ? 'insight_ready'
+          : 'insight_partial';
+    const uiHints = buildUiHints(responseType, confidence);
+    const meta: ResponseMeta = {
+      request_id: requestId,
+      elapsed_ms: Date.now() - start,
+      app_name: session.appName,
+      session_id: session.sessionId,
+    };
 
     const response = NextResponse.json({
       status: 'success',
+      response_type: responseType,
       agent_message: agentMessage,
       insight,
+      status_phase: phaseTrace[phaseTrace.length - 1] ?? 'finalizing',
+      phase_trace: phaseTrace,
+      ui_hints: uiHints,
+      meta,
     });
     if (createdBrowserId) {
       response.cookies.set(BROWSER_COOKIE, createdBrowserId, {
@@ -271,7 +555,24 @@ export async function POST(request: NextRequest) {
     console.error('POST /api/chat error:', err);
     const message = err instanceof Error ? err.message : 'Internal server error';
     const response = NextResponse.json(
-      { status: 'error', error: message },
+      {
+        status: 'error',
+        response_type: 'error',
+        error: message,
+        status_phase: 'finalizing',
+        phase_trace: ['thinking', 'finalizing'],
+        ui_hints: {
+          auto_open_insight: false,
+          pin_allowed: false,
+          confidence: 'low',
+        },
+        meta: {
+          request_id: requestId,
+          elapsed_ms: Date.now() - start,
+          app_name: PINNED_APP_NAME ?? 'dashboard_agent',
+          session_id: '',
+        },
+      },
       { status: 500 }
     );
     if (createdBrowserId) {

@@ -1,10 +1,24 @@
 'use client';
 
 import { useRef, useEffect } from 'react';
-import { Send, Bot, User } from 'lucide-react';
+import { Send, Bot, User, RotateCcw } from 'lucide-react';
 import { useCopilotStore } from '@/src/store/copilotStore';
 import { sendChat } from '@/src/services/chatApi';
 import { MiniCard } from './MiniCard';
+
+const phaseLabels: Record<string, string> = {
+  thinking: 'Understanding request',
+  querying: 'Running data query',
+  visualizing: 'Preparing insight view',
+  finalizing: 'Finalizing response',
+};
+
+const responseTypeLabels: Record<string, string> = {
+  message_only: 'Message only',
+  insight_partial: 'Partial insight',
+  insight_ready: 'Insight ready',
+  error: 'Error',
+};
 
 export function ChatPane() {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -13,38 +27,60 @@ export function ChatPane() {
     isSending,
     addUserMessage,
     setAgentMessage,
+    startRequest,
+    applyResponseState,
+    failRequest,
+    clearError,
     setCurrentInsight,
     setMainMode,
-    setSending,
+    statusPhase,
+    phaseTrace,
+    lastError,
+    lastPrompt,
+    lastResponseType,
   } = useCopilotStore();
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [chatHistory, isSending]);
 
-  const handleSend = async () => {
-    const input = document.getElementById('chat-input') as HTMLTextAreaElement | null;
-    const text = input?.value?.trim();
-    if (!text || isSending) return;
-
-    addUserMessage(text);
-    if (input) input.value = '';
-    setSending(true);
+  const sendPrompt = async (prompt: string) => {
+    if (!prompt.trim() || isSending) return;
+    clearError();
+    addUserMessage(prompt);
+    startRequest(prompt);
     setAgentMessage('', 'loading');
 
     try {
-      const res = await sendChat(text, chatHistory);
+      const res = await sendChat(prompt, chatHistory);
       setAgentMessage(res.agent_message, 'done', res.insight ?? null);
+      applyResponseState({
+        responseType: res.response_type,
+        statusPhase: res.status_phase,
+        phaseTrace: res.phase_trace,
+        uiHints: res.ui_hints,
+        meta: res.meta,
+        insight: res.insight ?? null,
+      });
       if (res.insight) {
         setCurrentInsight(res.insight);
+      }
+      if (res.response_type === 'insight_ready' && res.ui_hints.auto_open_insight) {
         setMainMode('insight');
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Request failed';
       setAgentMessage(msg, 'done', null);
-    } finally {
-      setSending(false);
+      failRequest(msg);
     }
+  };
+
+  const handleSend = async () => {
+    const input = document.getElementById('chat-input') as HTMLTextAreaElement | null;
+    const text = input?.value?.trim();
+    if (!text || isSending) return;
+    if (input) input.value = '';
+    await sendPrompt(text);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -59,10 +95,34 @@ export function ChatPane() {
     setMainMode('insight');
   };
 
+  const handleRetry = async () => {
+    if (!lastPrompt) return;
+    await sendPrompt(lastPrompt);
+  };
+
+  const currentPhaseLabel = statusPhase ? phaseLabels[statusPhase] ?? statusPhase : null;
+  const currentResponseLabel = lastResponseType
+    ? responseTypeLabels[lastResponseType] ?? lastResponseType
+    : null;
+
   return (
     <>
       <header className="shrink-0 px-4 py-3 border-b border-[var(--border)]">
-        <h1 className="text-lg font-semibold text-[var(--text)]">Chat</h1>
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-lg font-semibold text-[var(--text)]">Chat</h1>
+          <div className="flex items-center gap-2">
+            {statusPhase && (
+              <span className="text-xs rounded-full bg-white/10 px-2 py-1 text-[var(--text-muted)] capitalize">
+                {currentPhaseLabel}
+              </span>
+            )}
+            {lastResponseType && lastResponseType !== 'error' && (
+              <span className="text-xs rounded-full bg-white/5 px-2 py-1 text-[var(--text-muted)]">
+                {currentResponseLabel}
+              </span>
+            )}
+          </div>
+        </div>
       </header>
 
       <div
@@ -100,7 +160,9 @@ export function ChatPane() {
               }`}
             >
               {msg.status === 'loading' && !msg.content ? (
-                <span className="text-sm text-[var(--text-muted)]">Agent computing...</span>
+                <span className="text-sm text-[var(--text-muted)]">
+                  {currentPhaseLabel ?? 'Working on your request...'}
+                </span>
               ) : (
                 <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
               )}
@@ -119,13 +181,39 @@ export function ChatPane() {
               <Bot className="w-4 h-4 text-[var(--text-muted)]" />
             </div>
             <div className="rounded-lg px-3 py-2 bg-[var(--agent-bubble)] text-sm text-[var(--text-muted)]">
-              Agent computing...
+              {currentPhaseLabel ?? 'Working on your request...'}
             </div>
+          </div>
+        )}
+        {phaseTrace.length > 1 && (
+          <div className="flex flex-wrap gap-2 pt-1">
+            {phaseTrace.map((phase, idx) => (
+              <span
+                key={`${phase}-${idx}`}
+                className="text-[11px] rounded-full bg-white/5 px-2 py-1 text-[var(--text-muted)] capitalize"
+              >
+                {phaseLabels[phase] ?? phase}
+              </span>
+            ))}
           </div>
         )}
       </div>
 
       <div className="shrink-0 p-4 border-t border-[var(--border)]">
+        {lastError && (
+          <div className="mb-2 rounded-md border border-red-900/40 bg-red-900/20 px-3 py-2 text-xs text-red-200 flex items-center justify-between gap-2">
+            <span className="truncate">Request failed: {lastError}</span>
+            <button
+              type="button"
+              onClick={handleRetry}
+              disabled={isSending || !lastPrompt}
+              className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded bg-red-700/40 hover:bg-red-700/60 disabled:opacity-50"
+            >
+              <RotateCcw className="w-3 h-3" />
+              Retry
+            </button>
+          </div>
+        )}
         <div className="flex gap-2 items-end">
           <textarea
             id="chat-input"
@@ -144,6 +232,11 @@ export function ChatPane() {
             <Send className="w-5 h-5" />
           </button>
         </div>
+        {isSending && (
+          <p className="mt-2 text-[11px] text-[var(--text-muted)]">
+            Complex questions may take up to a minute while the agent runs tools.
+          </p>
+        )}
       </div>
     </>
   );

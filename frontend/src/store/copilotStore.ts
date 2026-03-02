@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import type { ApiInsight } from '../types/insight';
+import type {
+  ApiInsight,
+  ResponseMeta,
+  ResponseType,
+  StatusPhase,
+  UiHints,
+} from '../types/insight';
 
 export type MainMode = 'insight' | 'board';
 
@@ -21,13 +27,33 @@ interface CopilotState {
   mainMode: MainMode;
   pinnedBoardItems: PinnedBoardItem[];
   isSending: boolean;
+  requestState: 'idle' | 'sending' | 'completed' | 'error';
+  statusPhase: StatusPhase | null;
+  phaseTrace: StatusPhase[];
+  lastResponseType: ResponseType | null;
+  uiHints: UiHints | null;
+  lastMeta: ResponseMeta | null;
+  lastPrompt: string | null;
+  lastError: string | null;
 
   addUserMessage: (content: string) => void;
   setAgentMessage: (content: string, status: 'loading' | 'done', insightData?: ApiInsight | null) => void;
+  startRequest: (prompt: string) => void;
+  applyResponseState: (payload: {
+    responseType: ResponseType;
+    statusPhase?: StatusPhase;
+    phaseTrace?: StatusPhase[];
+    uiHints?: UiHints | null;
+    meta?: ResponseMeta | null;
+    insight?: ApiInsight | null;
+  }) => void;
+  failRequest: (message: string) => void;
+  clearError: () => void;
   setCurrentInsight: (insight: ApiInsight | null) => void;
   setMainMode: (mode: MainMode) => void;
   pinCurrentToBoard: () => void;
   unpinFromBoard: (id: string) => void;
+  clearBoard: () => void;
   setSending: (sending: boolean) => void;
   clearChat: () => void;
 }
@@ -63,6 +89,14 @@ export const useCopilotStore = create<CopilotState>((set) => ({
   mainMode: 'insight',
   pinnedBoardItems: loadPinned(),
   isSending: false,
+  requestState: 'idle',
+  statusPhase: null,
+  phaseTrace: [],
+  lastResponseType: null,
+  uiHints: null,
+  lastMeta: null,
+  lastPrompt: null,
+  lastError: null,
 
   addUserMessage: (content) =>
     set((state) => ({
@@ -86,6 +120,57 @@ export const useCopilotStore = create<CopilotState>((set) => ({
       }
       return { chatHistory: next };
     }),
+
+  startRequest: (prompt) =>
+    set({
+      isSending: true,
+      requestState: 'sending',
+      statusPhase: 'thinking',
+      phaseTrace: ['thinking'],
+      lastPrompt: prompt,
+      lastError: null,
+    }),
+
+  applyResponseState: ({ responseType, statusPhase, phaseTrace, uiHints, meta, insight }) =>
+    set((state) => {
+      const nextState: Partial<CopilotState> = {
+        isSending: false,
+        requestState: 'completed',
+        statusPhase: statusPhase ?? 'finalizing',
+        phaseTrace: phaseTrace && phaseTrace.length > 0 ? phaseTrace : ['thinking', 'finalizing'],
+        lastResponseType: responseType,
+        uiHints: uiHints ?? null,
+        lastMeta: meta ?? null,
+      };
+
+      if (insight) {
+        nextState.currentInsight = insight;
+      }
+
+      // Do not force insight mode unless contract explicitly says so.
+      if (uiHints?.auto_open_insight && responseType === 'insight_ready') {
+        nextState.mainMode = 'insight';
+      }
+
+      return nextState;
+    }),
+
+  failRequest: (message) =>
+    set({
+      isSending: false,
+      requestState: 'error',
+      statusPhase: 'finalizing',
+      phaseTrace: ['thinking', 'finalizing'],
+      lastResponseType: 'error',
+      lastError: message,
+      uiHints: {
+        auto_open_insight: false,
+        pin_allowed: false,
+        confidence: 'low',
+      },
+    }),
+
+  clearError: () => set({ lastError: null }),
 
   setCurrentInsight: (insight) => set({ currentInsight: insight }),
 
@@ -112,7 +197,24 @@ export const useCopilotStore = create<CopilotState>((set) => ({
       return { pinnedBoardItems: next };
     }),
 
+  clearBoard: () =>
+    set(() => {
+      const next: PinnedBoardItem[] = [];
+      savePinned(next);
+      return { pinnedBoardItems: next };
+    }),
+
   setSending: (sending) => set({ isSending: sending }),
 
-  clearChat: () => set({ chatHistory: [], currentInsight: null }),
+  clearChat: () =>
+    set({
+      chatHistory: [],
+      currentInsight: null,
+      requestState: 'idle',
+      statusPhase: null,
+      phaseTrace: [],
+      lastResponseType: null,
+      lastMeta: null,
+      lastError: null,
+    }),
 }));

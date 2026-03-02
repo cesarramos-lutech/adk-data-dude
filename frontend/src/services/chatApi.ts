@@ -1,11 +1,35 @@
-import type { ApiInsight } from '@/src/types/insight';
+import type {
+  ApiInsight,
+  ResponseMeta,
+  ResponseType,
+  StatusPhase,
+  UiHints,
+} from '@/src/types/insight';
 import type { ChatMessage } from '@/src/store/copilotStore';
 
-export interface ChatResponse {
-  status: string;
+export interface ChatSuccessResponse {
+  status: 'success';
+  response_type: ResponseType;
   agent_message: string;
   insight?: ApiInsight | null;
+  status_phase?: StatusPhase;
+  phase_trace?: StatusPhase[];
+  ui_hints: UiHints;
+  meta: ResponseMeta;
 }
+
+export interface ChatErrorResponse {
+  status: 'error';
+  response_type: 'error';
+  error?: string;
+  agent_message?: string;
+  status_phase?: StatusPhase;
+  phase_trace?: StatusPhase[];
+  ui_hints?: UiHints;
+  meta?: Partial<ResponseMeta>;
+}
+
+export type ChatResponse = ChatSuccessResponse | ChatErrorResponse;
 
 /** Build history for API from store messages (optional context). */
 export function buildHistory(messages: ChatMessage[]): { role: string; content: string }[] {
@@ -17,7 +41,7 @@ export function buildHistory(messages: ChatMessage[]): { role: string; content: 
 export async function sendChat(
   prompt: string,
   history: ChatMessage[] = []
-): Promise<ChatResponse> {
+): Promise<ChatSuccessResponse> {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -41,7 +65,7 @@ export async function sendChat(
 
   const data: ChatResponse = await res.json();
   if (data.status !== 'success') {
-    throw new Error(data.agent_message || 'Unknown error');
+    throw new Error(data.error || data.agent_message || 'Unknown error');
   }
   return data;
 }

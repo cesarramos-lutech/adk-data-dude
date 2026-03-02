@@ -41,4 +41,33 @@ export interface ApiInsight {
   suggested_chart_type?: string;
   x_axis_key?: string;
   y_axis_key?: string;
+  insight_summary?: string;
+  key_points?: string[];
+  recommended_actions?: string[];
+  visualization_mode?: 'chart' | 'narrative';
+}
+
+export type ResponseType =
+  | 'message_only'
+  | 'insight_partial'
+  | 'insight_ready'
+  | 'error';
+
+export type StatusPhase =
+  | 'thinking'
+  | 'querying'
+  | 'visualizing'
+  | 'finalizing';
+
+export interface UiHints {
+  auto_open_insight: boolean;
+  pin_allowed: boolean;
+  confidence: 'low' | 'medium' | 'high';
+}
+
+export interface ResponseMeta {
+  request_id: string;
+  elapsed_ms: number;
+  app_name: string;
+  session_id: string;
 }

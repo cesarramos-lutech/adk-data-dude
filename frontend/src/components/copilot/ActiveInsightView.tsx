@@ -46,6 +46,8 @@ export function ActiveInsightView() {
     { id: 'table', label: 'Data Table', icon: <Table className="w-4 h-4" /> },
     { id: 'sql', label: 'SQL Code', icon: <Code className="w-4 h-4" /> },
   ];
+  const sqlCtaAllowed =
+    currentInsight.sql_status === 'available' || currentInsight.sql_status === 'derived_from_text';
 
   return (
     <div className="h-full flex flex-col">
@@ -88,7 +90,7 @@ export function ActiveInsightView() {
             Partial insight: some fields are missing. You can still inspect available chart/table/SQL data.
           </div>
         )}
-        {tab === 'chart' && currentInsight.sql_query?.trim() && (
+        {tab === 'chart' && sqlCtaAllowed && currentInsight.sql_query?.trim() && (
           <div className="mb-3 flex justify-end">
             <button
               type="button"

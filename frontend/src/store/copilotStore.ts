@@ -35,6 +35,9 @@ interface CopilotState {
   lastMeta: ResponseMeta | null;
   lastPrompt: string | null;
   lastError: string | null;
+  lastClearedBoardSnapshot: PinnedBoardItem[] | null;
+  clearBoardUndoExpiresAt: number | null;
+  clearBoardUndoTimerId: number | null;
 
   addUserMessage: (content: string) => void;
   setAgentMessage: (content: string, status: 'loading' | 'done', insightData?: ApiInsight | null) => void;
@@ -54,6 +57,8 @@ interface CopilotState {
   pinCurrentToBoard: () => void;
   unpinFromBoard: (id: string) => void;
   clearBoard: () => void;
+  clearBoardWithUndoWindow: (windowMs?: number) => void;
+  restoreClearedBoard: () => void;
   setSending: (sending: boolean) => void;
   clearChat: () => void;
 }
@@ -97,6 +102,9 @@ export const useCopilotStore = create<CopilotState>((set) => ({
   lastMeta: null,
   lastPrompt: null,
   lastError: null,
+  lastClearedBoardSnapshot: null,
+  clearBoardUndoExpiresAt: null,
+  clearBoardUndoTimerId: null,
 
   addUserMessage: (content) =>
     set((state) => ({
@@ -202,6 +210,56 @@ export const useCopilotStore = create<CopilotState>((set) => ({
       const next: PinnedBoardItem[] = [];
       savePinned(next);
       return { pinnedBoardItems: next };
+    }),
+
+  clearBoardWithUndoWindow: (windowMs = 10000) =>
+    set((state) => {
+      if (state.clearBoardUndoTimerId && typeof window !== 'undefined') {
+        window.clearTimeout(state.clearBoardUndoTimerId);
+      }
+      const snapshot = [...state.pinnedBoardItems];
+      const next: PinnedBoardItem[] = [];
+      savePinned(next);
+
+      let timerId: number | null = null;
+      if (typeof window !== 'undefined') {
+        timerId = window.setTimeout(() => {
+          set({
+            lastClearedBoardSnapshot: null,
+            clearBoardUndoExpiresAt: null,
+            clearBoardUndoTimerId: null,
+          });
+        }, windowMs);
+      }
+
+      return {
+        pinnedBoardItems: next,
+        lastClearedBoardSnapshot: snapshot,
+        clearBoardUndoExpiresAt: Date.now() + windowMs,
+        clearBoardUndoTimerId: timerId,
+      };
+    }),
+
+  restoreClearedBoard: () =>
+    set((state) => {
+      const snapshot = state.lastClearedBoardSnapshot;
+      if (!snapshot || snapshot.length === 0) {
+        return {
+          lastClearedBoardSnapshot: null,
+          clearBoardUndoExpiresAt: null,
+          clearBoardUndoTimerId: null,
+        };
+      }
+      if (state.clearBoardUndoTimerId && typeof window !== 'undefined') {
+        window.clearTimeout(state.clearBoardUndoTimerId);
+      }
+      savePinned(snapshot);
+      return {
+        pinnedBoardItems: snapshot,
+        lastClearedBoardSnapshot: null,
+        clearBoardUndoExpiresAt: null,
+        clearBoardUndoTimerId: null,
+      };
     }),
 
   setSending: (sending) => set({ isSending: sending }),

@@ -1,15 +1,25 @@
 'use client';
 
 import { useCopilotStore } from '@/src/store/copilotStore';
+import { toastManager } from '@/src/utils/ToastManager';
 import { BoardCard } from './BoardCard';
 
 export function MyBoardView() {
-  const { pinnedBoardItems, clearBoard } = useCopilotStore();
+  const { pinnedBoardItems, clearBoardWithUndoWindow, restoreClearedBoard } = useCopilotStore();
 
   const handleClearBoard = () => {
     const ok = window.confirm('Clear all pinned insights from the board? This cannot be undone.');
     if (!ok) return;
-    clearBoard();
+    clearBoardWithUndoWindow(10000);
+    toastManager.show({
+      message: 'Board cleared. You can undo for 10 seconds.',
+      type: 'warning',
+      durationMs: 10000,
+      action: {
+        label: 'Undo',
+        onClick: () => restoreClearedBoard(),
+      },
+    });
   };
 
   if (pinnedBoardItems.length === 0) {

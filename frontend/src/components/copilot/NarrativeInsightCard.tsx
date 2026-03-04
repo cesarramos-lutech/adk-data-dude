@@ -13,13 +13,14 @@ export function NarrativeInsightCard({ insight, compact = false }: NarrativeInsi
     'No narrative summary provided for this insight.';
   const keyPoints = insight.key_points ?? [];
   const actions = insight.recommended_actions ?? [];
+  const summaryClass = compact ? 'line-clamp-4' : '';
 
   return (
     <div className={`rounded-lg border border-[var(--border)] bg-[var(--agent-bubble)] ${compact ? 'p-3' : 'p-4'}`}>
       <h3 className={`${compact ? 'text-sm' : 'text-base'} font-semibold text-[var(--text)]`}>
         {insight.title}
       </h3>
-      <p className={`mt-2 text-[var(--text-muted)] ${compact ? 'text-xs' : 'text-sm'} leading-relaxed`}>
+      <p className={`mt-2 text-[var(--text-muted)] ${compact ? 'text-xs' : 'text-sm'} leading-relaxed ${summaryClass}`}>
         {summary}
       </p>
 
@@ -29,7 +30,7 @@ export function NarrativeInsightCard({ insight, compact = false }: NarrativeInsi
             Key Points
           </p>
           <ul className={`mt-1 ${compact ? 'text-xs' : 'text-sm'} text-[var(--text)] space-y-1`}>
-            {keyPoints.slice(0, compact ? 2 : 5).map((point, idx) => (
+            {keyPoints.slice(0, compact ? 3 : 5).map((point, idx) => (
               <li key={`${idx}-${point}`} className="list-disc ml-4">
                 {point}
               </li>

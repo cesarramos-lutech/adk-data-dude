@@ -36,6 +36,8 @@ export type AgentStatus =
 export interface ApiInsight {
   title: string;
   sql_query: string;
+  sql_status?: SqlStatus;
+  sql_status_reason?: string;
   columns: string[];
   rows: Record<string, unknown>[];
   suggested_chart_type?: string;
@@ -46,6 +48,12 @@ export interface ApiInsight {
   recommended_actions?: string[];
   visualization_mode?: 'chart' | 'narrative';
 }
+
+export type SqlStatus =
+  | 'available'
+  | 'missing_backend'
+  | 'derived_from_text'
+  | 'redacted';
 
 export type ResponseType =
   | 'message_only'
@@ -63,6 +71,7 @@ export interface UiHints {
   auto_open_insight: boolean;
   pin_allowed: boolean;
   confidence: 'low' | 'medium' | 'high';
+  narrative_sql_validated?: boolean;
 }
 
 export interface ResponseMeta {

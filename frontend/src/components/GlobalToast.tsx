@@ -3,16 +3,16 @@
 import React, { useState, useEffect } from 'react';
 import { Snackbar, Button, IconButton } from '@mui/material';
 import { Close as CloseIcon } from '@mui/icons-material';
-import { toastManager } from '../utils/ToastManager';
+import { toastManager, type ToastPayload } from '../utils/ToastManager';
 
 export const GlobalToast: React.FC = () => {
   const [open, setOpen] = useState(false);
-  const [message, setMessage] = useState('');
+  const [toast, setToast] = useState<ToastPayload>({ message: '', type: 'info' });
 
   useEffect(() => {
     // Register listener
-    toastManager.register((msg, type) => {
-      setMessage(msg);
+    toastManager.register((payload) => {
+      setToast(payload);
       setOpen(true);
     });
 
@@ -31,6 +31,23 @@ export const GlobalToast: React.FC = () => {
   // The "Dismiss" or "Retry" action button style
   const action = (
     <React.Fragment>
+      {toast.action ? (
+        <Button
+          size="small"
+          onClick={(e) => {
+            toast.action?.onClick();
+            handleClose(e);
+          }}
+          sx={{
+            color: '#8ab4f8',
+            fontWeight: 600,
+            textTransform: 'none',
+            fontSize: '0.9rem',
+          }}
+        >
+          {toast.action.label}
+        </Button>
+      ) : null}
       <Button 
         size="small" 
         onClick={(e) => handleClose(e)}
@@ -58,9 +75,9 @@ export const GlobalToast: React.FC = () => {
   return (
     <Snackbar
       open={open}
-      autoHideDuration={6000}
+      autoHideDuration={toast.durationMs ?? 6000}
       onClose={handleClose}
-      message={message}
+      message={toast.message}
       action={action}
       // UPDATED POSITION: Bottom Left
       anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}

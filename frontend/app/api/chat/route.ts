@@ -3,6 +3,7 @@ import type {
   ApiInsight,
   ResponseMeta,
   ResponseType,
+  SqlStatus,
   StatusPhase,
   UiHints,
 } from '@/src/types/insight';
@@ -16,6 +17,11 @@ type CandidateSource = 'tool_response' | 'state_delta';
 type InsightCandidate = {
   source: CandidateSource;
   payload: unknown;
+};
+
+type TitleCandidates = {
+  explicit: string;
+  structured: string;
 };
 
 const sessionsByBrowser = new Map<string, SessionState>();
@@ -187,7 +193,7 @@ function firstSentence(text: string): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   const idx = clean.search(/[.!?](\s|$)/);
   if (idx > 0) return clean.slice(0, idx + 1).trim();
-  return clean.slice(0, 80).trim();
+  return clean.slice(0, 120).trim();
 }
 
 function sanitizeTitle(value: string): string {
@@ -195,24 +201,78 @@ function sanitizeTitle(value: string): string {
   if (!compact) return '';
   const stripped = compact
     .replace(/^here are (the )?(key )?(insights|findings)[:\s-]*/i, '')
+    .replace(/^here'?s (a )?(quick )?(summary|overview)[:\s-]*/i, '')
     .replace(/^based on your question[:,\s-]*/i, '')
     .replace(/^for your question[:,\s-]*/i, '')
+    .replace(/^answer[:\s-]*/i, '')
+    .replace(/^insight[:\s-]*/i, '')
+    .replace(/^analysis[:\s-]*/i, '')
     .trim();
   if (!stripped) return '';
-  return stripped.length > 96 ? `${stripped.slice(0, 96).trim()}...` : stripped;
+  const dequoted = stripped.replace(/^["'`]+|["'`]+$/g, '').trim();
+  if (!dequoted) return '';
+  return dequoted.length > 80 ? `${dequoted.slice(0, 77).trim()}...` : dequoted;
 }
 
-function extractTitleFromPayload(payload: unknown): string {
-  if (!payload || typeof payload !== 'object') return '';
+function normalizeCompare(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isPromptEcho(candidate: string, prompt: string): boolean {
+  if (!candidate || !prompt) return false;
+  return normalizeCompare(candidate) === normalizeCompare(prompt);
+}
+
+function deriveTitleFromRows(columns: string[], rows: Record<string, unknown>[]): string {
+  const categorical = columns.find((col) => rows.some((r) => typeof r[col] === 'string'));
+  const numeric = columns.find((col) => rows.some((r) => typeof r[col] === 'number'));
+  if (categorical && numeric) return sanitizeTitle(`${numeric} by ${categorical}`) || 'Business insight';
+  if (numeric) return sanitizeTitle(`${numeric} trend`) || 'Business insight';
+  if (columns.length > 0) return sanitizeTitle(`${columns[0]} overview`) || 'Business insight';
+  return 'Business insight';
+}
+
+function extractTitleCandidates(payload: unknown): TitleCandidates {
+  if (!payload || typeof payload !== 'object') {
+    return { explicit: '', structured: '' };
+  }
   const rec = payload as Record<string, unknown>;
-  const value =
-    rec.insight_title ??
-    rec.title ??
-    rec.headline ??
-    rec.summary_title ??
-    rec.card_title;
-  if (typeof value !== 'string') return '';
-  return sanitizeTitle(value);
+  const explicitRaw = rec.insight_title ?? rec.title;
+  const structuredRaw = rec.summary_title ?? rec.headline ?? rec.card_title;
+  return {
+    explicit: typeof explicitRaw === 'string' ? sanitizeTitle(explicitRaw) : '',
+    structured: typeof structuredRaw === 'string' ? sanitizeTitle(structuredRaw) : '',
+  };
+}
+
+function chooseCanonicalTitle(args: {
+  prompt: string;
+  text: string;
+  rows: Record<string, unknown>[];
+  columns: string[];
+  titleCandidates: TitleCandidates;
+}): string {
+  const { prompt, text, rows, columns, titleCandidates } = args;
+  const fallbackTextTitle = sanitizeTitle(firstSentence(text));
+  const fallbackMetricTitle = deriveTitleFromRows(columns, rows);
+  const ordered = [
+    titleCandidates.explicit,
+    titleCandidates.structured,
+    fallbackTextTitle,
+    fallbackMetricTitle,
+    'Business insight',
+  ];
+  for (const title of ordered) {
+    const clean = sanitizeTitle(title);
+    if (!clean) continue;
+    if (isPromptEcho(clean, prompt)) continue;
+    return clean;
+  }
+  return 'Business insight';
 }
 
 function extractNarrativeFromPayload(payload: unknown): {
@@ -245,6 +305,48 @@ function extractNarrativeFromPayload(payload: unknown): {
   return { insight_summary, key_points, recommended_actions };
 }
 
+function isSqlRedacted(payload: unknown, sql: string): boolean {
+  if (/\[redacted\]/i.test(sql)) return true;
+  if (!payload || typeof payload !== 'object') return false;
+  const rec = payload as Record<string, unknown>;
+  if (rec.sql_redacted === true) return true;
+  if (typeof rec.sql_status === 'string' && rec.sql_status.toLowerCase() === 'redacted') return true;
+  return false;
+}
+
+function resolveSqlStatus(payload: unknown, payloadSql: string, fallbackSql: string): {
+  sql: string;
+  status: SqlStatus;
+  reason: string;
+} {
+  if (isSqlRedacted(payload, payloadSql || fallbackSql)) {
+    return {
+      sql: '',
+      status: 'redacted',
+      reason: 'SQL was redacted by backend policy.',
+    };
+  }
+  if (payloadSql) {
+    return {
+      sql: payloadSql,
+      status: 'available',
+      reason: 'SQL was returned directly by backend.',
+    };
+  }
+  if (fallbackSql) {
+    return {
+      sql: fallbackSql,
+      status: 'derived_from_text',
+      reason: 'SQL was inferred from agent response text.',
+    };
+  }
+  return {
+    sql: '',
+    status: 'missing_backend',
+    reason: 'Backend did not provide SQL for this response.',
+  };
+}
+
 function inferChartType(columns: string[], rows: Record<string, unknown>[]): string {
   if (rows.length === 0) return 'table';
   const numericCols = columns.filter((col) => rows.some((r) => typeof r[col] === 'number'));
@@ -267,15 +369,28 @@ function buildInsightFromCandidate(
   text: string,
   candidate: InsightCandidate | null
 ): { insight: ApiInsight | null; confidence: UiHints['confidence'] } {
-  const defaultTitle = sanitizeTitle(firstSentence(text)) || 'Generated insight';
   const fallbackSql = extractSql(text);
 
   if (!candidate) {
     if (!fallbackSql) return { insight: null, confidence: 'low' };
+    const { sql, status: sql_status, reason: sql_status_reason } = resolveSqlStatus(
+      null,
+      '',
+      fallbackSql
+    );
+    const fallbackTitle = chooseCanonicalTitle({
+      prompt,
+      text,
+      rows: [],
+      columns: [],
+      titleCandidates: { explicit: '', structured: '' },
+    });
     return {
       insight: {
-        title: defaultTitle,
-        sql_query: fallbackSql,
+        title: fallbackTitle,
+        sql_query: sql,
+        sql_status,
+        sql_status_reason,
         columns: [],
         rows: [],
         suggested_chart_type: 'table',
@@ -289,13 +404,24 @@ function buildInsightFromCandidate(
   const rows = extractRowsFromPayload(candidate.payload);
   const payloadColumns = extractColumnsFromPayload(candidate.payload);
   const columns = payloadColumns.length > 0 ? payloadColumns : Object.keys(rows[0] ?? {});
-  const sql = extractSqlFromPayload(candidate.payload) || fallbackSql;
-  const payloadTitle = extractTitleFromPayload(candidate.payload);
+  const payloadSql = extractSqlFromPayload(candidate.payload);
+  const { sql, status: sql_status, reason: sql_status_reason } = resolveSqlStatus(
+    candidate.payload,
+    payloadSql,
+    fallbackSql
+  );
+  const titleCandidates = extractTitleCandidates(candidate.payload);
   const narrative = extractNarrativeFromPayload(candidate.payload);
   const axes = inferAxes(columns, rows);
   const confidence: UiHints['confidence'] =
     candidate.source === 'tool_response' ? 'high' : 'medium';
-  const title = payloadTitle || defaultTitle;
+  const title = chooseCanonicalTitle({
+    prompt,
+    text,
+    rows,
+    columns,
+    titleCandidates,
+  });
   const hasNarrative = !!narrative.insight_summary || !!text.trim();
   const visualization_mode = rows.length === 0 && hasNarrative ? 'narrative' : 'chart';
 
@@ -303,6 +429,8 @@ function buildInsightFromCandidate(
     insight: {
       title,
       sql_query: sql,
+      sql_status,
+      sql_status_reason,
       columns,
       rows,
       suggested_chart_type: inferChartType(columns, rows),
@@ -364,11 +492,16 @@ function extractPhaseTrace(events: Record<string, unknown>[]): StatusPhase[] {
   return phases;
 }
 
-function buildUiHints(responseType: ResponseType, confidence: UiHints['confidence']): UiHints {
+function buildUiHints(
+  responseType: ResponseType,
+  confidence: UiHints['confidence'],
+  narrativeSqlValidated = false
+): UiHints {
   return {
     auto_open_insight: responseType === 'insight_ready' && confidence !== 'low',
     pin_allowed: responseType === 'insight_ready',
     confidence,
+    narrative_sql_validated: narrativeSqlValidated,
   };
 }
 
@@ -518,13 +651,17 @@ export async function POST(request: NextRequest) {
     const bestCandidate = selectBestCandidate(extractCandidates(events));
     const { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate);
     const hasNarrative = !!insight?.insight_summary || (insight?.key_points?.length ?? 0) > 0;
+    const hasChartCapableData = (insight?.rows.length ?? 0) > 0 && (insight?.columns.length ?? 0) > 0;
+    const hasValidatedSql =
+      insight?.sql_status === 'available' || insight?.sql_status === 'derived_from_text';
+    const narrativeSqlValidated = !hasChartCapableData && hasNarrative && hasValidatedSql;
     const responseType: ResponseType =
       !insight
         ? 'message_only'
-        : insight.rows.length > 0 || hasNarrative
+        : hasChartCapableData || narrativeSqlValidated
           ? 'insight_ready'
           : 'insight_partial';
-    const uiHints = buildUiHints(responseType, confidence);
+    const uiHints = buildUiHints(responseType, confidence, narrativeSqlValidated);
     const meta: ResponseMeta = {
       request_id: requestId,
       elapsed_ms: Date.now() - start,

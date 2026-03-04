@@ -1,7 +1,19 @@
 // utils/ToastManager.ts
 
 type ToastType = 'success' | 'error' | 'info' | 'warning';
-type ToastListener = (message: string, type: ToastType) => void;
+type ToastAction = {
+  label: string;
+  onClick: () => void;
+};
+
+export type ToastPayload = {
+  message: string;
+  type?: ToastType;
+  durationMs?: number;
+  action?: ToastAction;
+};
+
+type ToastListener = (payload: ToastPayload) => void;
 
 class ToastManager {
   private listener: ToastListener | null = null;
@@ -17,11 +29,20 @@ class ToastManager {
   }
 
   // Service files call this to show a notification
-  show(message: string, type: ToastType = 'info') {
+  show(messageOrPayload: string | ToastPayload, type: ToastType = 'info') {
+    const payload: ToastPayload =
+      typeof messageOrPayload === 'string'
+        ? { message: messageOrPayload, type }
+        : {
+            message: messageOrPayload.message,
+            type: messageOrPayload.type ?? 'info',
+            durationMs: messageOrPayload.durationMs,
+            action: messageOrPayload.action,
+          };
     if (this.listener) {
-      this.listener(message, type);
+      this.listener(payload);
     } else {
-      console.warn('ToastManager: Message missed (no listener):', message);
+      console.warn('ToastManager: Message missed (no listener):', payload.message);
     }
   }
 }

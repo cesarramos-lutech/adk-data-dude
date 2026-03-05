@@ -1,70 +1,150 @@
-# Playground — Dashboard Agent
+# Playground — ADK Dashboard Agent + Next.js Copilot UI
 
-**Try and break things.** This is a playground data agent: it queries BigQuery (look_ecommerce), builds dynamic dashboards (Altair/Vega-Lite), and gives short business recommendations. It reuses the same GCP project, BigQuery dataset, and Gemini (Vertex) as the [data-science-agent](../data-science-agent).
+This project is a local playground for business-question answering on top of ADK + BigQuery:
 
-## Setup
+- Backend agent (`dashboard_agent`) runs via FastAPI/ADK.
+- Frontend is a Next.js app focused on chat + insight canvas + storytelling board.
+- Users can pin chart and narrative cards to build a mixed data story.
 
-1. **Copy env from data-science-agent** (recommended for look_ecommerce):
-   ```bash
-   cp ../data-science-agent/.env .env
-   ```
-   Or copy `.env.example` to `.env` and set:
-   - `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`
-   - `BQ_COMPUTE_PROJECT_ID`, `BQ_DATA_PROJECT_ID`, `BQ_DATASET_ID`
+## What changed recently
+
+The frontend has migrated from older Vite patterns to a Next.js App Router app, with UX improvements for:
+
+- explicit SQL trust states (`available`, `missing_backend`, `derived_from_text`, `redacted`)
+- stronger response classification (`message_only`, `insight_partial`, `insight_ready`)
+- canonical board titles (anti prompt-echo + length guard)
+- narrative storytelling card support
+- clear-board with 10s undo action
+
+## Repository map (key files)
+
+- Backend entry: `main.py`
+- Agent package: `dashboard_agent/`
+- Frontend app: `frontend/`
+- API adapter: `frontend/app/api/chat/route.ts`
+- UI state: `frontend/src/store/copilotStore.ts`
+- Shared insight contract: `frontend/src/types/insight.ts`
+- UX PRD: `frontend_ux_improvements_prd.md`
+- Detailed architecture + API contract: `docs/architecture.md`
+- UX docs:
+  - `UX_INDEX.md`
+  - `UX_QUICK_REFERENCE.md`
+  - `UX_TESTING_SUITE_README.md`
+  - `UX_TEST_REPORT.md`
+
+## Prerequisites
+
+- Python 3.11+ (recommended 3.12)
+- Node 20+
+- npm
+- GCP credentials configured for BigQuery access
+
+## Backend setup
+
+1. Create `.env` in the project root (`playground/.env`) and configure:
+   - `GOOGLE_CLOUD_PROJECT`
+   - `GOOGLE_CLOUD_LOCATION`
+   - `BQ_COMPUTE_PROJECT_ID`
+   - `BQ_DATA_PROJECT_ID`
+   - `BQ_DATASET_ID`
    - `DATASET_CONFIG_FILE=./look_ecommerce_dataset_config.json`
-   - `ROOT_AGENT_MODEL`, `BIGQUERY_AGENT_MODEL`, `BASELINE_NL2SQL_MODEL` (e.g. `gemini-2.5-pro`)
+   - model variables used by the agent (`ROOT_AGENT_MODEL`, etc.)
 
-2. **Virtual environment and install**
+2. Install Python deps:
 
-   **Option A — uv (recommended)**  
-   `uv sync` creates a `.venv` in the project and installs deps. Use it with or without activating:
+   Option A (recommended):
    ```bash
-   cd gcp-data-agents/playground
    uv sync
-   # Run with uv (no need to activate):
-   uv run adk web
-   uv run adk run dashboard_agent
-   uv run uvicorn main:app --host 0.0.0.0 --port 8081
-   ```
-   Or activate the venv and run directly:
-   ```bash
-   source .venv/bin/activate   # macOS/Linux
-   # .venv\Scripts\activate   # Windows (Git Bash or cmd)
-   adk web
-   adk run dashboard_agent
-   uvicorn main:app --host 0.0.0.0 --port 8081
    ```
 
-   **Option B — standard venv + pip**
+   Option B:
    ```bash
-   cd gcp-data-agents/playground
    python3 -m venv .venv
-   source .venv/bin/activate   # macOS/Linux
-   # .venv\Scripts\activate   # Windows
+   source .venv/bin/activate
    pip install -e .
-   adk web
-   adk run dashboard_agent
+   ```
+
+3. Run backend API:
+   ```bash
+   source .venv/bin/activate
    uvicorn main:app --host 0.0.0.0 --port 8081
    ```
 
-## Frontend (optional)
-
-A React UI for the dashboard agent lives in `frontend/`. It talks to the backend over HTTP.
-
-1. **Start the backend** (from `playground/`): `adk web` or `uvicorn main:app --port 8000`.
-2. **Start the frontend** (from `playground/frontend/`):
+4. Health check:
    ```bash
-   cd frontend
-   npm install --legacy-peer-deps
-   npm install lodash --legacy-peer-deps   # if needed for Looker components
-   npx vite --mode dev
+   curl http://localhost:8081/health
    ```
-3. Open http://localhost:5173. The app proxies `/api` to the backend at http://localhost:8000.
 
-## Dataset
+## Frontend setup
 
-Uses **look_ecommerce** (Looker ecommerce sample). Config: `look_ecommerce_dataset_config.json`. Same BQ dataset as data-science-agent when using the same `.env`.
+From `playground/frontend`:
 
-## No API keys in code
+1. Install dependencies:
+   ```bash
+   npm install --legacy-peer-deps
+   ```
 
-All credentials come from environment variables (`.env`). Never commit `.env`; `.env.example` has placeholders only.
+2. Ensure `frontend/.env.local` has:
+   ```env
+   NEXT_PUBLIC_ADK_API_BASE_URL=http://localhost:8081
+   ADK_API_BASE_URL=http://localhost:8081
+   ADK_APP_NAME=dashboard_agent
+   ```
+
+3. Run dev server:
+   ```bash
+   npm run dev
+   ```
+
+4. Open:
+   - Frontend: http://localhost:3000
+
+## Local run (quick start)
+
+Open two terminals:
+
+Terminal A (backend):
+```bash
+cd playground
+source .venv/bin/activate
+uvicorn main:app --host 0.0.0.0 --port 8081
+```
+
+Terminal B (frontend):
+```bash
+cd playground/frontend
+npm run dev
+```
+
+## Architecture and contracts
+
+For technical deep-dive (data flow, state model, endpoint contract, and operational sequence), see:
+
+- `docs/architecture.md`
+
+## Build and checks
+
+From `frontend/`:
+```bash
+npm run build
+```
+
+Notes:
+- Build compiles and type-checks.
+- If environment is missing ESLint, Next.js may warn during build.
+
+## Troubleshooting
+
+- Port in use:
+  ```bash
+  lsof -ti:3000,8081 | xargs kill -9
+  ```
+- Backend unreachable from frontend:
+  - check `frontend/.env.local` base URLs
+  - verify backend health on `:8081/health`
+- Slow responses (25s-60s) are expected for some ADK+BigQuery flows.
+
+## Security
+
+- Do not commit `.env` with secrets.
+- Use service account / ADC credentials via environment variables.

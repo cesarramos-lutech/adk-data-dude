@@ -2,17 +2,17 @@
 
 import { useCopilotStore } from '@/src/store/copilotStore';
 import { toastManager } from '@/src/utils/ToastManager';
-import { BoardCard } from './BoardCard';
+import { DashboardGrid } from '@/src/components/dashboard/DashboardGrid';
 
 export function MyBoardView() {
   const { pinnedBoardItems, clearBoardWithUndoWindow, restoreClearedBoard } = useCopilotStore();
 
   const handleClearBoard = () => {
-    const ok = window.confirm('Clear all pinned insights from the board? This cannot be undone.');
+    const ok = window.confirm('Clear all panels from the dashboard?');
     if (!ok) return;
     clearBoardWithUndoWindow(10000);
     toastManager.show({
-      message: 'Board cleared. You can undo for 10 seconds.',
+      message: 'Dashboard cleared. You can undo for 10 seconds.',
       type: 'warning',
       durationMs: 10000,
       action: {
@@ -24,29 +24,36 @@ export function MyBoardView() {
 
   if (pinnedBoardItems.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-sm">
-        No pinned insights yet. Click “Pin to Board” on an active insight to add it here.
+      <div className="h-full flex flex-col items-center justify-center gap-4 text-center p-8">
+        <div className="text-4xl">📊</div>
+        <div>
+          <p className="text-[var(--text)] font-medium text-sm">Your dashboard is empty</p>
+          <p className="text-[var(--text-muted)] text-xs mt-1">
+            Ask a question, then click "Add to Dashboard" on any Active Insight.
+          </p>
+        </div>
+        <div className="text-xs text-[var(--text-muted)]/60 mt-2">
+          Panels are draggable and resizable. Layout is saved automatically.
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full overflow-auto p-4">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-[var(--text)]">My Board</h2>
+    <div className="h-full overflow-auto">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--border)]">
+        <span className="text-xs text-[var(--text-muted)]">
+          {pinnedBoardItems.length} panel{pinnedBoardItems.length !== 1 ? 's' : ''} · Drag to rearrange · Resize from corners
+        </span>
         <button
           type="button"
           onClick={handleClearBoard}
           className="text-xs px-2 py-1 rounded-md border border-red-800/50 bg-red-900/20 hover:bg-red-900/30 text-red-200"
         >
-          Clear Board
+          Clear Dashboard
         </button>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {pinnedBoardItems.map((item) => (
-          <BoardCard key={item.id} item={item} />
-        ))}
-      </div>
+      <DashboardGrid items={pinnedBoardItems} />
     </div>
   );
 }

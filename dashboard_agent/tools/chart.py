@@ -83,54 +83,96 @@ def build_dashboard(
                 row[k] = v.isoformat()
             elif pd.isna(v):
                 row[k] = None
+    chart_title = f"{y_col} by {x_col}" if y_col else x_col
     if chart_type == "bar":
         if y_col:
-            chart = alt.Chart(alt.Data(values=data)).mark_bar().encode(
-                x=alt.X(x_col, type="nominal" if not pd.api.types.is_numeric_dtype(df[x_col]) else "quantitative"),
-                y=alt.Y(y_col, type="quantitative"),
+            chart = (
+                alt.Chart(alt.Data(values=data))
+                .mark_bar()
+                .encode(
+                    x=alt.X(x_col, type="nominal" if not pd.api.types.is_numeric_dtype(df[x_col]) else "quantitative", title=x_col),
+                    y=alt.Y(y_col, type="quantitative", title=y_col),
+                    tooltip=[x_col, y_col],
+                )
+                .properties(title=chart_title)
             )
         else:
-            chart = alt.Chart(alt.Data(values=data)).mark_bar().encode(
-                x=alt.X(x_col, type="nominal"),
-                y=alt.Y("count():Q", title="Count"),
+            chart = (
+                alt.Chart(alt.Data(values=data))
+                .mark_bar()
+                .encode(
+                    x=alt.X(x_col, type="nominal", title=x_col),
+                    y=alt.Y("count():Q", title="Count"),
+                    tooltip=[x_col, "count():Q"],
+                )
+                .properties(title=chart_title)
             )
     elif chart_type == "line":
         if not y_col:
-            # Need distinct x and y: use first two columns, or same column for y and index for x
             if len(df.columns) >= 2:
                 x_col = df.columns[0]
                 y_col = df.columns[1]
             else:
-                # Single column: use it as y, row order as x (add index to data)
                 x_col = "__index__"
                 y_col = df.columns[0]
                 for i, row in enumerate(data):
                     row[x_col] = i
         if x_col == y_col:
-            # Fallback if both ended up the same (e.g. single column): use index for x
             x_col = "__index__"
             for i, row in enumerate(data):
                 row[x_col] = i
-        chart = alt.Chart(alt.Data(values=data)).mark_line().encode(
-            x=alt.X(x_col, type="temporal" if "date" in str(df[x_col].dtype).lower() and x_col in df.columns else "quantitative"),
-            y=alt.Y(y_col, type="quantitative"),
+        chart_title = f"{y_col} over {x_col}"
+        x_type = "temporal" if "date" in str(df[x_col].dtype).lower() and x_col in df.columns else "quantitative"
+        chart = (
+            alt.Chart(alt.Data(values=data))
+            .mark_line(point=True)
+            .encode(
+                x=alt.X(x_col, type=x_type, title=x_col),
+                y=alt.Y(y_col, type="quantitative", title=y_col),
+                tooltip=[x_col, y_col],
+            )
+            .properties(title=chart_title)
         )
     elif chart_type == "scatter":
         y_col = y_col or (df.columns[1] if len(df.columns) > 1 else df.columns[0])
-        chart = alt.Chart(alt.Data(values=data)).mark_circle(size=60).encode(
-            x=alt.X(x_col, type="quantitative"),
-            y=alt.Y(y_col, type="quantitative"),
+        chart_title = f"{y_col} vs {x_col}"
+        chart = (
+            alt.Chart(alt.Data(values=data))
+            .mark_circle(size=60)
+            .encode(
+                x=alt.X(x_col, type="quantitative", title=x_col),
+                y=alt.Y(y_col, type="quantitative", title=y_col),
+                tooltip=[x_col, y_col],
+            )
+            .properties(title=chart_title)
         )
     else:
         if y_col:
-            chart = alt.Chart(alt.Data(values=data)).mark_bar().encode(
-                x=alt.X(x_col, type="nominal"),
-                y=alt.Y(y_col, type="quantitative"),
+            chart = (
+                alt.Chart(alt.Data(values=data))
+                .mark_bar()
+                .encode(
+                    x=alt.X(x_col, type="nominal", title=x_col),
+                    y=alt.Y(y_col, type="quantitative", title=y_col),
+                    tooltip=[x_col, y_col],
+                )
+                .properties(title=chart_title)
             )
         else:
-            chart = alt.Chart(alt.Data(values=data)).mark_bar().encode(
-                x=alt.X(x_col, type="nominal"),
-                y=alt.Y("count():Q", title="Count"),
+            chart = (
+                alt.Chart(alt.Data(values=data))
+                .mark_bar()
+                .encode(
+                    x=alt.X(x_col, type="nominal", title=x_col),
+                    y=alt.Y("count():Q", title="Count"),
+                )
+                .properties(title=chart_title)
             )
     spec = chart.to_dict()
+    # Add responsive sizing so the chart fills its container in the UI
+    spec["width"] = "container"
+    spec["height"] = 320
+    # Save to session state so the frontend can pick it up from stateDelta
+    if tool_context is not None:
+        tool_context.state["vega_lite_spec"] = spec
     return json.dumps(spec, default=str)

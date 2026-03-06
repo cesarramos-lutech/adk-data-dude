@@ -25,3 +25,30 @@ body {
 .recharts-surface {
   overflow: visible;
 }
+
+/* Vega-embed dark theme overrides */
+.vega-embed {
+  width: 100%;
+}
+.vega-embed summary {
+  display: none;
+}
+
+/* react-grid-layout resize handle */
+.react-resizable-handle {
+  background-image: none !important;
+  width: 16px !important;
+  height: 16px !important;
+  bottom: 4px !important;
+  right: 4px !important;
+  cursor: se-resize;
+  border-right: 2px solid rgba(255,255,255,0.2);
+  border-bottom: 2px solid rgba(255,255,255,0.2);
+  border-radius: 0 0 4px 0;
+}
+
+.react-grid-item.react-grid-placeholder {
+  background: rgba(59, 130, 246, 0.15) !important;
+  border: 1px dashed rgba(59, 130, 246, 0.4) !important;
+  border-radius: 8px;
+}

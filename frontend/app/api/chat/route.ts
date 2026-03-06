@@ -465,6 +465,37 @@ function selectBestCandidate(candidates: InsightCandidate[]): InsightCandidate |
   return best;
 }
 
+function extractVegaSpec(events: Record<string, unknown>[]): Record<string, unknown> | null {
+  // Priority 1: stateDelta.vega_lite_spec (written by build_dashboard via tool_context.state)
+  for (const event of events) {
+    const actions = event.actions as Record<string, unknown> | undefined;
+    const stateDelta = actions?.stateDelta as Record<string, unknown> | undefined;
+    if (stateDelta?.vega_lite_spec) {
+      const spec = parseJsonStringMaybe(stateDelta.vega_lite_spec);
+      if (spec && typeof spec === 'object' && !Array.isArray(spec)) {
+        return spec as Record<string, unknown>;
+      }
+    }
+  }
+  // Priority 2: functionResponse from build_dashboard tool call
+  for (const event of events) {
+    const content = event.content as Record<string, unknown> | undefined;
+    const parts = Array.isArray(content?.parts) ? content!.parts : [];
+    for (const part of parts) {
+      if (!part || typeof part !== 'object') continue;
+      const p = part as Record<string, unknown>;
+      const fr = p.functionResponse as Record<string, unknown> | undefined;
+      if (typeof fr?.name === 'string' && fr.name === 'build_dashboard' && fr.response !== undefined) {
+        const spec = parseJsonStringMaybe(fr.response);
+        if (spec && typeof spec === 'object' && !Array.isArray(spec)) {
+          return spec as Record<string, unknown>;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function phaseFromTool(toolName: string): StatusPhase {
   const lower = toolName.toLowerCase();
   if (lower.includes('sql') || lower.includes('query') || lower.includes('bigquery')) return 'querying';
@@ -524,7 +555,9 @@ async function parseAdkResponse(res: Response): Promise<unknown> {
         }
       })
       .filter(Boolean);
-    return parsed.length > 0 ? parsed[parsed.length - 1] : {};
+    // Return ALL events so extractCandidates can find tool responses + state deltas
+    // from intermediate events (e.g. build_dashboard's vega spec).
+    return parsed.length > 0 ? parsed : [{}];
   }
   const text = await res.text();
   if (!text.trim()) return {};
@@ -650,6 +683,11 @@ export async function POST(request: NextRequest) {
     const agentMessage = extractAgentText(events);
     const bestCandidate = selectBestCandidate(extractCandidates(events));
     const { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate);
+    // Attach vega spec from build_dashboard if present
+    if (insight) {
+      const vegaSpec = extractVegaSpec(events);
+      if (vegaSpec) insight.vega_spec = vegaSpec;
+    }
     const hasNarrative = !!insight?.insight_summary || (insight?.key_points?.length ?? 0) > 0;
     const hasChartCapableData = (insight?.rows.length ?? 0) > 0 && (insight?.columns.length ?? 0) > 0;
     const hasValidatedSql =

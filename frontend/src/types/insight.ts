@@ -32,6 +32,8 @@ export type AgentStatus =
   | 'visualizing'
   | 'error';
 
+export type PanelType = 'chart' | 'narrative' | 'table' | 'sql';
+
 /** PRD: POST /api/chat response insight shape */
 export interface ApiInsight {
   title: string;
@@ -47,6 +49,8 @@ export interface ApiInsight {
   key_points?: string[];
   recommended_actions?: string[];
   visualization_mode?: 'chart' | 'narrative';
+  /** Vega-Lite spec from build_dashboard tool */
+  vega_spec?: Record<string, unknown>;
 }
 
 export type SqlStatus =

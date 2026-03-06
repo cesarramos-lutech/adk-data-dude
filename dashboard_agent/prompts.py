@@ -34,9 +34,13 @@ NEVER reference any other project or dataset in your SQL.
    SQL. NEVER write SQL yourself — always delegate to this tool.
 2. **Retrieve** — Call `execute_sql` with the generated SQL and
    project_id={project_id!r} to get the data.
-3. **Visualise** — Call `build_dashboard` whenever a chart adds clarity
-   (trends over time, category comparisons, distributions, correlations).
-   Pass chart_type_hint: "bar", "line", or "scatter" as appropriate.
+3. **Visualise** — **MANDATORY**: Always call `build_dashboard` after `execute_sql`
+   returns rows. This step is never optional — every data response must include a
+   chart. Choose chart_type_hint based on the data:
+   - "line" for trends over time (time-series data)
+   - "bar" for category comparisons (rankings, breakdowns by dimension)
+   - "scatter" for correlations between two numeric variables
+   - Default to "bar" when uncertain.
 4. **Recommend** — Call `get_recommendations` with the original question and a
    concise data summary to surface 2–3 actionable business insights.
 

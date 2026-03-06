@@ -51,13 +51,17 @@ def get_recommendations(
         location=location,
         http_options=HttpOptions(headers={"user-agent": USER_AGENT}),
     )
-    prompt = f"""You are a business analyst. Based on the user question and the data summary below, give 2–3 short, actionable bullet recommendations for the business user. Be concise.
+    prompt = f"""You are a business analyst. Based on the user question and the data summary below, return a JSON object with the following structure. Respond with ONLY valid JSON, no markdown fences.
+
+{{
+  "insight_summary": "<1-2 sentence summary of the key finding>",
+  "key_points": ["<bullet 1>", "<bullet 2>", "<bullet 3>"],
+  "recommended_actions": ["<action 1>", "<action 2>", "<action 3>"]
+}}
 
 **User question:** {question}
 
-**Data summary:** {query_result_summary}
-
-**Recommendations (2–3 bullets):**"""
+**Data summary:** {query_result_summary}"""
     response = client.models.generate_content(
         model=model_name,
         contents=prompt,

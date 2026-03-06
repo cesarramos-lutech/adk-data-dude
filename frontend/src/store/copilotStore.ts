@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type {
   ApiInsight,
+  PanelType,
   ResponseMeta,
   ResponseType,
   StatusPhase,
@@ -16,9 +17,18 @@ export interface ChatMessage {
   insightData?: ApiInsight | null;
 }
 
+export interface GridLayout {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface PinnedBoardItem extends ApiInsight {
   id: string;
   pinnedAt: number;
+  panel_type: PanelType;
+  layout: GridLayout;
 }
 
 interface CopilotState {
@@ -54,7 +64,7 @@ interface CopilotState {
   clearError: () => void;
   setCurrentInsight: (insight: ApiInsight | null) => void;
   setMainMode: (mode: MainMode) => void;
-  pinCurrentToBoard: () => void;
+  pinCurrentToBoard: (panelType?: PanelType) => void;
   unpinFromBoard: (id: string) => void;
   clearBoard: () => void;
   clearBoardWithUndoWindow: (windowMs?: number) => void;
@@ -184,14 +194,18 @@ export const useCopilotStore = create<CopilotState>((set) => ({
 
   setMainMode: (mode) => set({ mainMode: mode }),
 
-  pinCurrentToBoard: () =>
+  pinCurrentToBoard: (panelType = 'chart') =>
     set((state) => {
       const insight = state.currentInsight;
       if (!insight) return state;
+      // Place new panel below existing ones
+      const maxY = state.pinnedBoardItems.reduce((acc, p) => Math.max(acc, p.layout.y + p.layout.h), 0);
       const item: PinnedBoardItem = {
         ...insight,
         id: nextPinnedId(),
         pinnedAt: Date.now(),
+        panel_type: panelType,
+        layout: { x: 0, y: maxY, w: 6, h: panelType === 'chart' ? 4 : panelType === 'table' ? 5 : 3 },
       };
       const next = [...state.pinnedBoardItems, item];
       savePinned(next);

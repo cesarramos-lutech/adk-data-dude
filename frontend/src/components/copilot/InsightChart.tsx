@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import type { ApiInsight } from '@/src/types/insight';
 import {
   BarChart,
@@ -16,15 +17,52 @@ interface InsightChartProps {
 }
 
 export function InsightChart({ insight }: InsightChartProps) {
-  const { rows, x_axis_key, y_axis_key, suggested_chart_type } = insight;
-  const xKey = x_axis_key || insight.columns[0];
-  const yKey = y_axis_key || insight.columns[1] || insight.columns[0];
+  const vegaRef = useRef<HTMLDivElement>(null);
+  const { vega_spec, rows, x_axis_key, y_axis_key } = insight;
 
+  useEffect(() => {
+    if (!vega_spec || !vegaRef.current) return;
+    const container = vegaRef.current;
+
+    let finalize: (() => void) | undefined;
+    import('vega-embed').then(({ default: embed }) => {
+      const spec = { ...vega_spec, width: 'container', height: 320 };
+      embed(container, spec as Parameters<typeof embed>[1], {
+        actions: false,
+        theme: 'dark',
+        config: {
+          background: 'transparent',
+          axis: { labelColor: '#9ca3af', titleColor: '#9ca3af', gridColor: '#374151' },
+          title: { color: '#e2e8f0', fontSize: 13 },
+          view: { stroke: 'transparent' },
+        },
+      }).then((result) => {
+        finalize = () => result.finalize();
+      }).catch(console.error);
+    });
+
+    return () => finalize?.();
+  }, [vega_spec]);
+
+  if (vega_spec) {
+    return (
+      <div
+        ref={vegaRef}
+        className="w-full"
+        style={{ minHeight: 340 }}
+      />
+    );
+  }
+
+  // Fallback: Recharts bar chart when no Vega spec is available
   if (!rows?.length) {
     return (
       <p className="text-[var(--text-muted)] text-sm">No data to visualize.</p>
     );
   }
+
+  const xKey = x_axis_key || insight.columns[0];
+  const yKey = y_axis_key || insight.columns[1] || insight.columns[0];
 
   const data = rows.map((r) => ({
     name: String(r[xKey] ?? ''),

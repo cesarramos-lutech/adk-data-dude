@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { Send, Bot, User, RotateCcw } from 'lucide-react';
 import { useCopilotStore } from '@/src/store/copilotStore';
 import { sendChat } from '@/src/services/chatApi';

@@ -14,8 +14,10 @@
 
 """Recommendation tool: call Gemini to return 2–3 bullet recommendations for the business user."""
 
+import json
 import logging
 import os
+import re
 
 from google.adk.tools import ToolContext
 from google.genai import Client
@@ -62,9 +64,41 @@ def get_recommendations(
 **User question:** {question}
 
 **Data summary:** {query_result_summary}"""
-    response = client.models.generate_content(
-        model=model_name,
-        contents=prompt,
-        config={"temperature": 0.3},
-    )
-    return (response.text or "").strip()
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config={"temperature": 0.3},
+        )
+        raw_text = (response.text or "").strip()
+    except Exception as exc:
+        logger.error("Gemini API call failed in get_recommendations: %s", exc)
+        raw_text = ""
+
+    cleaned = re.sub(r"^```(?:json)?\s*", "", raw_text)
+    cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+
+    fallback = {
+        "insight_summary": raw_text or "No recommendations available.",
+        "key_points": [],
+        "recommended_actions": [],
+    }
+
+    if not cleaned:
+        return json.dumps(fallback)
+
+    try:
+        parsed = json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("get_recommendations: Gemini returned non-JSON, using fallback")
+        return json.dumps(fallback)
+
+    if not isinstance(parsed, dict):
+        return json.dumps(fallback)
+
+    validated = {
+        "insight_summary": parsed.get("insight_summary") or fallback["insight_summary"],
+        "key_points": parsed.get("key_points") if isinstance(parsed.get("key_points"), list) else [],
+        "recommended_actions": parsed.get("recommended_actions") if isinstance(parsed.get("recommended_actions"), list) else [],
+    }
+    return json.dumps(validated)

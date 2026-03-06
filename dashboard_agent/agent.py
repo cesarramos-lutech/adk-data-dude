@@ -40,7 +40,7 @@ def store_results_in_context(
     tool_context: ToolContext,
     tool_response: dict,
 ) -> dict | None:
-    """After execute_sql succeeds, save rows into state for build_dashboard.
+    """After execute_sql, save rows (or error) into state for downstream tools.
 
     build_dashboard reads from state instead of accepting rows as a parameter,
     which avoids passing large data through the LLM.
@@ -48,6 +48,13 @@ def store_results_in_context(
     if tool.name == ADK_BUILTIN_BQ_EXECUTE_SQL_TOOL:
         if tool_response.get("status") == "SUCCESS":
             tool_context.state["bigquery_query_result"] = tool_response.get("rows", [])
+            tool_context.state["bigquery_query_error"] = ""
+        else:
+            tool_context.state["bigquery_query_result"] = []
+            error_msg = tool_response.get("error", "Unknown SQL error")
+            tool_context.state["bigquery_query_error"] = error_msg
+            logger.warning("execute_sql failed: %s", error_msg)
+            return {"status": "error", "error": error_msg}
     return None
 
 

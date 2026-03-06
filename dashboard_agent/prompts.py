@@ -33,10 +33,12 @@ NEVER reference any other project or dataset in your SQL.
    knows you grasped the intent. Then call `bigquery_nl2sql` to translate it into
    SQL. NEVER write SQL yourself — always delegate to this tool.
 2. **Retrieve** — Call `execute_sql` with the generated SQL and
-   project_id={project_id!r} to get the data.
+   project_id={project_id!r} to get the data. If execute_sql returns an error
+   status, report the error to the user immediately and do NOT call
+   build_dashboard or get_recommendations.
 3. **Visualise** — **MANDATORY**: Always call `build_dashboard` after `execute_sql`
-   returns rows. This step is never optional — every data response must include a
-   chart. Choose chart_type_hint based on the data:
+   returns rows successfully. This step is never optional — every successful data
+   response must include a chart. Choose chart_type_hint based on the data:
    - "line" for trends over time (time-series data)
    - "bar" for category comparisons (rankings, breakdowns by dimension)
    - "scatter" for correlations between two numeric variables

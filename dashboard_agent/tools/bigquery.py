@@ -92,7 +92,7 @@ def bigquery_nl2sql(question: str, tool_context: ToolContext) -> str:
 
     vertex_project = _require("GOOGLE_CLOUD_PROJECT")
     location       = _require("GOOGLE_CLOUD_LOCATION")
-    model_name     = os.getenv("BASELINE_NL2SQL_MODEL", "gemini-2.5-pro")
+    model_name     = os.getenv("ROOT_AGENT_MODEL", "gemini-2.5-pro")
 
     client = Client(
         vertexai=True,

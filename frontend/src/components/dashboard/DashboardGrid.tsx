@@ -14,7 +14,9 @@ function loadLayout(): Record<string, Omit<LayoutItem, 'i'>> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : {};
-  } catch {
+  } catch (err) {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    console.error('DashboardGrid: failed to parse layout from localStorage', raw, err);
     return {};
   }
 }
@@ -23,7 +25,14 @@ function saveLayout(layouts: Record<string, Omit<LayoutItem, 'i'>>) {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(layouts));
-  } catch {}
+  } catch (err) {
+    console.error('DashboardGrid: failed to save layout', err);
+    if (err instanceof DOMException && err.name === 'QuotaExceededError') {
+      import('@/src/utils/ToastManager').then(({ toastManager }) =>
+        toastManager.show('Storage quota exceeded. Dashboard layout changes may not persist.', 'warning')
+      );
+    }
+  }
 }
 
 export function DashboardGrid({ items }: { items: PinnedBoardItem[] }) {

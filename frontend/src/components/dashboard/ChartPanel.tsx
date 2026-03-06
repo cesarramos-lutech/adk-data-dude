@@ -1,43 +1,30 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
 import type { PinnedBoardItem } from '@/src/store/copilotStore';
+import { useVegaEmbed } from '@/src/hooks/useVegaEmbed';
+import { DASHBOARD_MIN_CHART_HEIGHT } from '@/src/lib/chartConstants';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
 
 export function ChartPanel({ item }: { item: PinnedBoardItem }) {
-  const vegaRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!item.vega_spec || !vegaRef.current) return;
-    const container = vegaRef.current;
-    let finalize: (() => void) | undefined;
-
-    import('vega-embed').then(({ default: embed }) => {
-      const spec = { ...item.vega_spec, width: 'container', height: 'container' };
-      embed(container, spec as Parameters<typeof embed>[1], {
-        actions: false,
-        theme: 'dark',
-        config: {
-          background: 'transparent',
-          axis: { labelColor: '#9ca3af', titleColor: '#9ca3af', gridColor: '#374151' },
-          title: { color: '#e2e8f0', fontSize: 12 },
-          view: { stroke: 'transparent' },
-        },
-      }).then((result) => {
-        finalize = () => result.finalize();
-      }).catch(console.error);
-    });
-
-    return () => finalize?.();
-  }, [item.vega_spec]);
+  const vegaRef = useVegaEmbed(item.vega_spec, { height: 'container' });
 
   if (item.vega_spec) {
-    return <div ref={vegaRef} className="w-full h-full" />;
+    return (
+      <div
+        ref={vegaRef}
+        className="w-full h-full"
+        style={{ minHeight: DASHBOARD_MIN_CHART_HEIGHT }}
+      />
+    );
   }
 
-  // Recharts fallback
-  const xKey = item.x_axis_key || item.columns[0];
-  const yKey = item.y_axis_key || item.columns[1] || item.columns[0];
+  const xKey = item.x_axis_key || item.columns?.[0];
+  const yKey = item.y_axis_key || item.columns?.[1] || item.columns?.[0];
+
+  if (!xKey || !yKey || !item.rows?.length) {
+    return <p className="text-[var(--text-muted)] text-xs p-4">No chart data available.</p>;
+  }
+
   const data = item.rows.slice(0, 50).map((r) => ({
     name: String(r[xKey] ?? ''),
     value: Number(r[yKey]) || 0,

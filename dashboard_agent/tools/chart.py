@@ -54,19 +54,22 @@ def _pick_columns(df: pd.DataFrame, chart_type: str) -> tuple[str, str | None]:
 
 def build_dashboard(
     chart_type_hint: str = "auto",
-    tool_context: ToolContext | None = None,
+    tool_context: ToolContext = None,
 ) -> str:
     """Build a Vega-Lite chart from the most recent query result stored in session state.
 
     Args:
         chart_type_hint: One of 'bar', 'line', 'scatter', or 'auto'.
         tool_context: ADK tool context used to read query results from state.
+            ADK injects this automatically; None means misconfigured wiring.
 
     Returns:
         JSON string of the Vega-Lite spec so the UI can render it.
     """
     logger.debug("build_dashboard - chart_type_hint: %s", chart_type_hint)
-    query_result = (tool_context.state.get("bigquery_query_result", []) if tool_context else [])
+    if tool_context is None:
+        raise RuntimeError("build_dashboard requires ToolContext — ADK should inject this automatically")
+    query_result = tool_context.state.get("bigquery_query_result", [])
     df = _to_dataframe(query_result)
     if df.empty or len(df.columns) < 1:
         return json.dumps({"description": "No data to chart.", "data": {"values": []}})
@@ -74,23 +77,24 @@ def build_dashboard(
     x_col, y_col = _pick_columns(df, chart_type if chart_type != "auto" else "bar")
     if chart_type == "auto":
         chart_type = "scatter" if (y_col and pd.api.types.is_numeric_dtype(df[x_col]) and pd.api.types.is_numeric_dtype(df[y_col])) else "bar"
-    # Limit rows for chart
-    df_chart = df.head(500)
-    data = df_chart.to_dict(orient="records")
-    for row in data:
-        for k, v in list(row.items()):
-            if hasattr(v, "isoformat"):
-                row[k] = v.isoformat()
-            elif pd.isna(v):
-                row[k] = None
+    # Limit rows and use DataFrame directly so Altair infers types for tooltips
+    df_chart = df.head(500).copy()
     chart_title = f"{y_col} by {x_col}" if y_col else x_col
+
+    def _x_type(col: str) -> str:
+        if pd.api.types.is_datetime64_any_dtype(df_chart[col]):
+            return "temporal"
+        if pd.api.types.is_numeric_dtype(df_chart[col]):
+            return "quantitative"
+        return "nominal"
+
     if chart_type == "bar":
         if y_col:
             chart = (
-                alt.Chart(alt.Data(values=data))
+                alt.Chart(df_chart)
                 .mark_bar()
                 .encode(
-                    x=alt.X(x_col, type="nominal" if not pd.api.types.is_numeric_dtype(df[x_col]) else "quantitative", title=x_col),
+                    x=alt.X(x_col, type=_x_type(x_col), title=x_col),
                     y=alt.Y(y_col, type="quantitative", title=y_col),
                     tooltip=[x_col, y_col],
                 )
@@ -98,7 +102,7 @@ def build_dashboard(
             )
         else:
             chart = (
-                alt.Chart(alt.Data(values=data))
+                alt.Chart(df_chart)
                 .mark_bar()
                 .encode(
                     x=alt.X(x_col, type="nominal", title=x_col),
@@ -109,22 +113,20 @@ def build_dashboard(
             )
     elif chart_type == "line":
         if not y_col:
-            if len(df.columns) >= 2:
-                x_col = df.columns[0]
-                y_col = df.columns[1]
+            if len(df_chart.columns) >= 2:
+                x_col = df_chart.columns[0]
+                y_col = df_chart.columns[1]
             else:
+                df_chart["__index__"] = range(len(df_chart))
                 x_col = "__index__"
-                y_col = df.columns[0]
-                for i, row in enumerate(data):
-                    row[x_col] = i
+                y_col = df_chart.columns[0]
         if x_col == y_col:
+            df_chart["__index__"] = range(len(df_chart))
             x_col = "__index__"
-            for i, row in enumerate(data):
-                row[x_col] = i
         chart_title = f"{y_col} over {x_col}"
-        x_type = "temporal" if "date" in str(df[x_col].dtype).lower() and x_col in df.columns else "quantitative"
+        x_type = "temporal" if (x_col in df_chart.columns and pd.api.types.is_datetime64_any_dtype(df_chart[x_col])) else "quantitative"
         chart = (
-            alt.Chart(alt.Data(values=data))
+            alt.Chart(df_chart)
             .mark_line(point=True)
             .encode(
                 x=alt.X(x_col, type=x_type, title=x_col),
@@ -134,10 +136,10 @@ def build_dashboard(
             .properties(title=chart_title)
         )
     elif chart_type == "scatter":
-        y_col = y_col or (df.columns[1] if len(df.columns) > 1 else df.columns[0])
+        y_col = y_col or (df_chart.columns[1] if len(df_chart.columns) > 1 else df_chart.columns[0])
         chart_title = f"{y_col} vs {x_col}"
         chart = (
-            alt.Chart(alt.Data(values=data))
+            alt.Chart(df_chart)
             .mark_circle(size=60)
             .encode(
                 x=alt.X(x_col, type="quantitative", title=x_col),
@@ -149,7 +151,7 @@ def build_dashboard(
     else:
         if y_col:
             chart = (
-                alt.Chart(alt.Data(values=data))
+                alt.Chart(df_chart)
                 .mark_bar()
                 .encode(
                     x=alt.X(x_col, type="nominal", title=x_col),
@@ -160,7 +162,7 @@ def build_dashboard(
             )
         else:
             chart = (
-                alt.Chart(alt.Data(values=data))
+                alt.Chart(df_chart)
                 .mark_bar()
                 .encode(
                     x=alt.X(x_col, type="nominal", title=x_col),
@@ -172,7 +174,5 @@ def build_dashboard(
     # Add responsive sizing so the chart fills its container in the UI
     spec["width"] = "container"
     spec["height"] = 320
-    # Save to session state so the frontend can pick it up from stateDelta
-    if tool_context is not None:
-        tool_context.state["vega_lite_spec"] = spec
+    tool_context.state["vega_lite_spec"] = spec
     return json.dumps(spec, default=str)

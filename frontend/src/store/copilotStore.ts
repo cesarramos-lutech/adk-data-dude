@@ -86,7 +86,9 @@ const loadPinned = (): PinnedBoardItem[] => {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
-  } catch {
+  } catch (err) {
+    const raw = localStorage.getItem('copilot_pinned_board');
+    console.error('copilotStore: failed to parse pinned board from localStorage', raw, err);
     return [];
   }
 };
@@ -95,7 +97,14 @@ const savePinned = (items: PinnedBoardItem[]) => {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem('copilot_pinned_board', JSON.stringify(items));
-  } catch {}
+  } catch (err) {
+    console.error('copilotStore: failed to save pinned board', err);
+    if (err instanceof DOMException && err.name === 'QuotaExceededError') {
+      import('../utils/ToastManager').then(({ toastManager }) =>
+        toastManager.show('Storage quota exceeded. Pinned board changes may not persist.', 'warning')
+      );
+    }
+  }
 };
 
 export const useCopilotStore = create<CopilotState>((set) => ({

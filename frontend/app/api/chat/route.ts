@@ -24,7 +24,50 @@ type TitleCandidates = {
   structured: string;
 };
 
+interface AdkFunctionCall {
+  name: string;
+  args: unknown;
+}
+
+interface AdkFunctionResponse {
+  name: string;
+  response: unknown;
+}
+
+interface AdkPart {
+  text?: string;
+  functionCall?: AdkFunctionCall;
+  functionResponse?: AdkFunctionResponse;
+}
+
+interface AdkEventContent {
+  parts?: AdkPart[];
+}
+
+interface AdkActions {
+  stateDelta?: Record<string, unknown>;
+}
+
+interface AdkEvent {
+  content?: AdkEventContent;
+  actions?: AdkActions;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isAdkPart(value: unknown): value is AdkPart {
+  return isRecord(value);
+}
+
+function asAdkEvent(value: unknown): AdkEvent | null {
+  if (!isRecord(value)) return null;
+  return value as AdkEvent;
+}
+
 const sessionsByBrowser = new Map<string, SessionState>();
+const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const BROWSER_COOKIE = 'copilot_browser_id';
 const USER_ID = 'user';
 const PINNED_APP_NAME = process.env.ADK_APP_NAME?.trim();
@@ -36,18 +79,15 @@ const ADK_BASE_URL = (
 ).replace(/\/+$/, '');
 
 function getTextFromParts(container: unknown): string[] {
-  if (!container || typeof container !== 'object') return [];
-  const rec = container as Record<string, unknown>;
-  const parts = Array.isArray(rec.parts) ? rec.parts : [];
+  if (!isRecord(container)) return [];
+  const content = container as AdkEventContent;
+  const parts = Array.isArray(content.parts) ? content.parts : [];
   const out: string[] = [];
   for (const part of parts) {
-    if (part && typeof part === 'object') {
-      const p = part as Record<string, unknown>;
-      if (typeof p.text === 'string' && p.text.trim()) out.push(p.text.trim());
-      if (p.functionCall && typeof p.functionCall === 'object') {
-        const fc = p.functionCall as Record<string, unknown>;
-        if (typeof fc.args === 'string' && fc.args.trim()) out.push(fc.args.trim());
-      }
+    if (!isAdkPart(part)) continue;
+    if (typeof part.text === 'string' && part.text.trim()) out.push(part.text.trim());
+    if (part.functionCall && typeof part.functionCall.args === 'string' && part.functionCall.args.trim()) {
+      out.push(part.functionCall.args.trim());
     }
   }
   return out;
@@ -64,17 +104,17 @@ function parseJsonStringMaybe(value: unknown): unknown {
   }
 }
 
-function normalizeEvents(raw: unknown): Record<string, unknown>[] {
+function normalizeEvents(raw: unknown): AdkEvent[] {
   if (Array.isArray(raw)) {
-    return raw.filter((v): v is Record<string, unknown> => !!v && typeof v === 'object');
+    return raw.filter((v): v is AdkEvent => isRecord(v));
   }
-  if (raw && typeof raw === 'object') return [raw as Record<string, unknown>];
+  if (isRecord(raw)) return [raw as AdkEvent];
   return [];
 }
 
-function extractAgentText(events: Record<string, unknown>[]): string {
+function extractAgentText(events: AdkEvent[]): string {
   for (let i = events.length - 1; i >= 0; i -= 1) {
-    const texts = getTextFromParts((events[i] as Record<string, unknown>).content);
+    const texts = getTextFromParts(events[i].content);
     if (texts.length > 0) return texts.join('\n').trim();
   }
   return 'The agent responded without readable text.';
@@ -95,56 +135,51 @@ function isScalar(value: unknown): boolean {
 
 function normalizeRows(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value) || value.length === 0) return [];
-  if (!value.every((item) => item && typeof item === 'object' && !Array.isArray(item))) return [];
+  if (!value.every((item) => isRecord(item))) return [];
   const rows = value as Record<string, unknown>[];
   const allScalar = rows.every((row) => Object.values(row).every(isScalar));
   return allScalar ? rows : [];
 }
 
 function extractRowsFromPayload(payload: unknown): Record<string, unknown>[] {
-  if (!payload || typeof payload !== 'object') return [];
-  const rec = payload as Record<string, unknown>;
+  if (!isRecord(payload)) return [];
 
-  const directRows = normalizeRows(rec.rows);
+  const directRows = normalizeRows(payload.rows);
   if (directRows.length > 0) return directRows;
 
-  const dataRows = normalizeRows(rec.data);
+  const dataRows = normalizeRows(payload.data);
   if (dataRows.length > 0) return dataRows;
 
-  const queryRows = normalizeRows(rec.query_result);
+  const queryRows = normalizeRows(payload.query_result);
   if (queryRows.length > 0) return queryRows;
 
-  const bqRows = normalizeRows(rec.bigquery_query_result);
+  const bqRows = normalizeRows(payload.bigquery_query_result);
   if (bqRows.length > 0) return bqRows;
 
   return normalizeRows(payload);
 }
 
 function extractSqlFromPayload(payload: unknown): string {
-  if (!payload || typeof payload !== 'object') return '';
-  const rec = payload as Record<string, unknown>;
-  const value = rec.sql_query ?? rec.sql ?? rec.query ?? rec.generated_sql;
+  if (!isRecord(payload)) return '';
+  const value = payload.sql_query ?? payload.sql ?? payload.query ?? payload.generated_sql;
   return typeof value === 'string' ? value.trim() : '';
 }
 
 function extractColumnsFromPayload(payload: unknown): string[] {
-  if (!payload || typeof payload !== 'object') return [];
-  const rec = payload as Record<string, unknown>;
-  if (Array.isArray(rec.columns) && rec.columns.every((c) => typeof c === 'string')) {
-    return rec.columns as string[];
+  if (!isRecord(payload)) return [];
+  if (Array.isArray(payload.columns) && payload.columns.every((c) => typeof c === 'string')) {
+    return payload.columns as string[];
   }
   return [];
 }
 
-function extractCandidates(events: Record<string, unknown>[]): InsightCandidate[] {
+function extractCandidates(events: AdkEvent[]): InsightCandidate[] {
   const candidates: InsightCandidate[] = [];
   for (const event of events) {
-    const content = event.content as Record<string, unknown> | undefined;
-    const parts = Array.isArray(content?.parts) ? content.parts : [];
+    const parts = event.content?.parts ?? [];
     for (const part of parts) {
-      if (!part || typeof part !== 'object') continue;
-      const p = part as Record<string, unknown>;
-      const fr = p.functionResponse as Record<string, unknown> | undefined;
+      if (!isAdkPart(part)) continue;
+      const fr = part.functionResponse;
       if (fr?.response !== undefined) {
         candidates.push({
           source: 'tool_response',
@@ -153,11 +188,9 @@ function extractCandidates(events: Record<string, unknown>[]): InsightCandidate[
       }
     }
 
-    const actions = event.actions as Record<string, unknown> | undefined;
-    const stateDelta = actions?.stateDelta;
-    if (!stateDelta || typeof stateDelta !== 'object') continue;
+    const delta = event.actions?.stateDelta;
+    if (!delta || typeof delta !== 'object') continue;
 
-    const delta = stateDelta as Record<string, unknown>;
     const knownKeys = [
       'bigquery_query_result',
       'query_result',
@@ -178,10 +211,11 @@ function extractCandidates(events: Record<string, unknown>[]): InsightCandidate[
 
     const sqlKeys = ['sql_query', 'generated_sql', 'sql'];
     for (const key of sqlKeys) {
-      if (typeof delta[key] === 'string' && (delta[key] as string).trim()) {
+      const val = delta[key];
+      if (typeof val === 'string' && val.trim()) {
         candidates.push({
           source: 'state_delta',
-          payload: { sql_query: (delta[key] as string).trim() },
+          payload: { sql_query: val.trim() },
         });
       }
     }
@@ -237,12 +271,9 @@ function deriveTitleFromRows(columns: string[], rows: Record<string, unknown>[])
 }
 
 function extractTitleCandidates(payload: unknown): TitleCandidates {
-  if (!payload || typeof payload !== 'object') {
-    return { explicit: '', structured: '' };
-  }
-  const rec = payload as Record<string, unknown>;
-  const explicitRaw = rec.insight_title ?? rec.title;
-  const structuredRaw = rec.summary_title ?? rec.headline ?? rec.card_title;
+  if (!isRecord(payload)) return { explicit: '', structured: '' };
+  const explicitRaw = payload.insight_title ?? payload.title;
+  const structuredRaw = payload.summary_title ?? payload.headline ?? payload.card_title;
   return {
     explicit: typeof explicitRaw === 'string' ? sanitizeTitle(explicitRaw) : '',
     structured: typeof structuredRaw === 'string' ? sanitizeTitle(structuredRaw) : '',
@@ -280,10 +311,9 @@ function extractNarrativeFromPayload(payload: unknown): {
   key_points?: string[];
   recommended_actions?: string[];
 } {
-  if (!payload || typeof payload !== 'object') return {};
-  const rec = payload as Record<string, unknown>;
+  if (!isRecord(payload)) return {};
 
-  const summaryRaw = rec.insight_summary ?? rec.summary ?? rec.narrative ?? rec.analysis;
+  const summaryRaw = payload.insight_summary ?? payload.summary ?? payload.narrative ?? payload.analysis;
   const insight_summary = typeof summaryRaw === 'string' ? summaryRaw.trim() : undefined;
 
   const toStringArray = (value: unknown): string[] | undefined => {
@@ -293,24 +323,23 @@ function extractNarrativeFromPayload(payload: unknown): {
   };
 
   const key_points =
-    toStringArray(rec.key_points) ??
-    toStringArray(rec.takeaways) ??
-    toStringArray(rec.findings);
+    toStringArray(payload.key_points) ??
+    toStringArray(payload.takeaways) ??
+    toStringArray(payload.findings);
 
   const recommended_actions =
-    toStringArray(rec.recommended_actions) ??
-    toStringArray(rec.next_actions) ??
-    toStringArray(rec.recommendations);
+    toStringArray(payload.recommended_actions) ??
+    toStringArray(payload.next_actions) ??
+    toStringArray(payload.recommendations);
 
   return { insight_summary, key_points, recommended_actions };
 }
 
 function isSqlRedacted(payload: unknown, sql: string): boolean {
   if (/\[redacted\]/i.test(sql)) return true;
-  if (!payload || typeof payload !== 'object') return false;
-  const rec = payload as Record<string, unknown>;
-  if (rec.sql_redacted === true) return true;
-  if (typeof rec.sql_status === 'string' && rec.sql_status.toLowerCase() === 'redacted') return true;
+  if (!isRecord(payload)) return false;
+  if (payload.sql_redacted === true) return true;
+  if (typeof payload.sql_status === 'string' && payload.sql_status.toLowerCase() === 'redacted') return true;
   return false;
 }
 
@@ -347,29 +376,36 @@ function resolveSqlStatus(payload: unknown, payloadSql: string, fallbackSql: str
   };
 }
 
+const TEMPORAL_HINTS = /^(date|time|month|year|week|period|quarter|day)/i;
+
 function inferChartType(columns: string[], rows: Record<string, unknown>[]): string {
   if (rows.length === 0) return 'table';
-  const numericCols = columns.filter((col) => rows.some((r) => typeof r[col] === 'number'));
+  const numericCols = columns.filter((c) => rows.some((r) => typeof r[c] === 'number'));
   if (numericCols.length === 0) return 'table';
+  const temporalCols = columns.filter((c) => TEMPORAL_HINTS.test(c));
+  if (temporalCols.length > 0 && numericCols.length > 0) return 'line';
+  if (numericCols.length >= 2 && temporalCols.length === 0) return 'scatter';
   return 'bar';
 }
 
 function inferAxes(columns: string[], rows: Record<string, unknown>[]): { x?: string; y?: string } {
   if (columns.length === 0) return {};
+  const temporal = columns.find((c) => TEMPORAL_HINTS.test(c));
   const numeric = columns.find((c) => rows.some((r) => typeof r[c] === 'number'));
   const categorical = columns.find((c) => rows.some((r) => typeof r[c] === 'string'));
   return {
-    x: categorical ?? columns[0],
-    y: numeric ?? columns.find((c) => c !== categorical) ?? columns[0],
+    x: temporal ?? categorical ?? columns[0],
+    y: numeric ?? columns.find((c) => c !== (temporal ?? categorical)) ?? columns[0],
   };
 }
 
 function buildInsightFromCandidate(
   prompt: string,
   text: string,
-  candidate: InsightCandidate | null
+  candidate: InsightCandidate | null,
+  globalSql: string = ''
 ): { insight: ApiInsight | null; confidence: UiHints['confidence'] } {
-  const fallbackSql = extractSql(text);
+  const fallbackSql = globalSql || extractSql(text);
 
   if (!candidate) {
     if (!fallbackSql) return { insight: null, confidence: 'low' };
@@ -404,7 +440,7 @@ function buildInsightFromCandidate(
   const rows = extractRowsFromPayload(candidate.payload);
   const payloadColumns = extractColumnsFromPayload(candidate.payload);
   const columns = payloadColumns.length > 0 ? payloadColumns : Object.keys(rows[0] ?? {});
-  const payloadSql = extractSqlFromPayload(candidate.payload);
+  const payloadSql = extractSqlFromPayload(candidate.payload) || globalSql;
   const { sql, status: sql_status, reason: sql_status_reason } = resolveSqlStatus(
     candidate.payload,
     payloadSql,
@@ -451,6 +487,38 @@ function scoreCandidate(candidate: InsightCandidate): number {
   return (rows.length > 0 ? 10 : 0) + (sql ? 2 : 0) + (candidate.source === 'tool_response' ? 3 : 1);
 }
 
+function extractSqlFromAllEvents(events: AdkEvent[]): string {
+  for (const event of events) {
+    const delta = event.actions?.stateDelta;
+    if (delta && typeof delta === 'object') {
+      for (const key of ['sql_query', 'generated_sql', 'sql']) {
+        const val = delta[key];
+        if (typeof val === 'string' && val.trim()) return val.trim();
+      }
+    }
+    for (const part of event.content?.parts ?? []) {
+      if (!isAdkPart(part)) continue;
+      const fc = part.functionCall;
+      if (fc && (fc.name === 'execute_sql' || fc.name === 'bigquery_nl2sql')) {
+        const args = fc.args;
+        if (isRecord(args)) {
+          const q = args.query ?? args.sql;
+          if (typeof q === 'string' && q.trim()) return q.trim();
+        }
+      }
+      const fr = part.functionResponse;
+      if (fr && fr.name === 'bigquery_nl2sql') {
+        const resp = fr.response;
+        if (isRecord(resp)) {
+          const r = resp.result ?? resp.sql ?? resp.query;
+          if (typeof r === 'string' && r.trim()) return r.trim();
+        }
+      }
+    }
+  }
+  return '';
+}
+
 function selectBestCandidate(candidates: InsightCandidate[]): InsightCandidate | null {
   if (candidates.length === 0) return null;
   let best = candidates[0];
@@ -465,31 +533,22 @@ function selectBestCandidate(candidates: InsightCandidate[]): InsightCandidate |
   return best;
 }
 
-function extractVegaSpec(events: Record<string, unknown>[]): Record<string, unknown> | null {
-  // Priority 1: stateDelta.vega_lite_spec (written by build_dashboard via tool_context.state)
+function extractVegaSpec(events: AdkEvent[]): Record<string, unknown> | null {
   for (const event of events) {
-    const actions = event.actions as Record<string, unknown> | undefined;
-    const stateDelta = actions?.stateDelta as Record<string, unknown> | undefined;
-    if (stateDelta?.vega_lite_spec) {
-      const spec = parseJsonStringMaybe(stateDelta.vega_lite_spec);
-      if (spec && typeof spec === 'object' && !Array.isArray(spec)) {
-        return spec as Record<string, unknown>;
-      }
+    const delta = event.actions?.stateDelta;
+    if (delta?.vega_lite_spec) {
+      const spec = parseJsonStringMaybe(delta.vega_lite_spec);
+      if (isRecord(spec)) return spec;
     }
   }
-  // Priority 2: functionResponse from build_dashboard tool call
   for (const event of events) {
-    const content = event.content as Record<string, unknown> | undefined;
-    const parts = Array.isArray(content?.parts) ? content!.parts : [];
+    const parts = event.content?.parts ?? [];
     for (const part of parts) {
-      if (!part || typeof part !== 'object') continue;
-      const p = part as Record<string, unknown>;
-      const fr = p.functionResponse as Record<string, unknown> | undefined;
-      if (typeof fr?.name === 'string' && fr.name === 'build_dashboard' && fr.response !== undefined) {
+      if (!isAdkPart(part)) continue;
+      const fr = part.functionResponse;
+      if (fr?.name === 'build_dashboard' && fr.response !== undefined) {
         const spec = parseJsonStringMaybe(fr.response);
-        if (spec && typeof spec === 'object' && !Array.isArray(spec)) {
-          return spec as Record<string, unknown>;
-        }
+        if (isRecord(spec)) return spec;
       }
     }
   }
@@ -503,7 +562,7 @@ function phaseFromTool(toolName: string): StatusPhase {
   return 'thinking';
 }
 
-function extractPhaseTrace(events: Record<string, unknown>[]): StatusPhase[] {
+function extractPhaseTrace(events: AdkEvent[]): StatusPhase[] {
   const phases: StatusPhase[] = [];
   const pushUnique = (phase: StatusPhase) => {
     if (phases[phases.length - 1] !== phase) phases.push(phase);
@@ -511,12 +570,10 @@ function extractPhaseTrace(events: Record<string, unknown>[]): StatusPhase[] {
 
   pushUnique('thinking');
   for (const event of events) {
-    const content = event.content as Record<string, unknown> | undefined;
-    const parts = Array.isArray(content?.parts) ? content.parts : [];
+    const parts = event.content?.parts ?? [];
     for (const part of parts) {
-      if (!part || typeof part !== 'object') continue;
-      const fc = (part as Record<string, unknown>).functionCall as Record<string, unknown> | undefined;
-      if (typeof fc?.name === 'string') pushUnique(phaseFromTool(fc.name));
+      if (!isAdkPart(part)) continue;
+      if (part.functionCall?.name) pushUnique(phaseFromTool(part.functionCall.name));
     }
   }
   pushUnique('finalizing');
@@ -589,6 +646,26 @@ async function getDefaultAppName(): Promise<string> {
   return 'dashboard_agent';
 }
 
+function extractSessionId(data: unknown): string | null {
+  if (typeof data === 'string' && data.trim()) return data.trim();
+  if (!isRecord(data)) return null;
+  for (const key of ['id', 'session_id', 'sessionId']) {
+    const val = data[key];
+    if (typeof val === 'string' && val.trim()) return val.trim();
+    if (typeof val === 'number') return String(val);
+  }
+  return null;
+}
+
+function evictStaleSessions(): void {
+  const now = Date.now();
+  for (const [key, state] of sessionsByBrowser) {
+    if (now - state.updatedAt > SESSION_TTL_MS) {
+      sessionsByBrowser.delete(key);
+    }
+  }
+}
+
 async function createSession(appName: string): Promise<string> {
   const sessionRes = await adkFetch(`/apps/${appName}/users/${USER_ID}/sessions`, {
     method: 'POST',
@@ -598,12 +675,18 @@ async function createSession(appName: string): Promise<string> {
     const detail = await sessionRes.text();
     throw new Error(`Failed to create ADK session: ${detail || sessionRes.status}`);
   }
-  const data = (await parseAdkResponse(sessionRes)) as { id?: string };
-  if (!data.id) throw new Error('ADK session response missing "id".');
-  return data.id;
+  const data = await parseAdkResponse(sessionRes);
+  const sessionId = extractSessionId(data);
+  if (!sessionId) {
+    throw new Error(
+      `ADK session response missing "id". Got: ${JSON.stringify(data).slice(0, 200)}`
+    );
+  }
+  return sessionId;
 }
 
 async function getOrCreateSession(browserId: string): Promise<SessionState> {
+  evictStaleSessions();
   const cached = sessionsByBrowser.get(browserId);
   if (cached) {
     cached.updatedAt = Date.now();
@@ -653,7 +736,32 @@ export async function POST(request: NextRequest) {
       createdBrowserId = browserId;
     }
 
-    const session = await getOrCreateSession(browserId);
+    let session: SessionState;
+    try {
+      session = await getOrCreateSession(browserId);
+    } catch (sessionErr) {
+      sessionsByBrowser.delete(browserId);
+      console.error('Session creation failed:', sessionErr);
+      const errMsg = sessionErr instanceof Error ? sessionErr.message : 'Backend unavailable';
+      return NextResponse.json(
+        {
+          status: 'error',
+          response_type: 'error',
+          error: errMsg,
+          status_phase: 'finalizing',
+          phase_trace: ['thinking', 'finalizing'],
+          ui_hints: { auto_open_insight: false, pin_allowed: false, confidence: 'low' as const },
+          meta: {
+            request_id: requestId,
+            elapsed_ms: Date.now() - start,
+            app_name: PINNED_APP_NAME ?? 'dashboard_agent',
+            session_id: '',
+          },
+        },
+        { status: 503 }
+      );
+    }
+
     const payload = {
       appName: session.appName,
       userId: USER_ID,
@@ -681,8 +789,9 @@ export async function POST(request: NextRequest) {
     const events = normalizeEvents(adkPayload);
     const phaseTrace = extractPhaseTrace(events);
     const agentMessage = extractAgentText(events);
+    const globalSql = extractSqlFromAllEvents(events);
     const bestCandidate = selectBestCandidate(extractCandidates(events));
-    const { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate);
+    const { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate, globalSql);
     // Attach vega spec from build_dashboard if present
     if (insight) {
       const vegaSpec = extractVegaSpec(events);

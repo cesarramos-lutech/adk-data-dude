@@ -61,6 +61,7 @@ export type SqlStatus =
 
 export type ResponseType =
   | 'message_only'
+  | 'answer'
   | 'insight_partial'
   | 'insight_ready'
   | 'error';

@@ -1,19 +1,30 @@
 'use client';
 
 import { useState } from 'react';
-import { PanelLeftClose, PanelLeft, RotateCcw } from 'lucide-react';
+import { PanelLeftClose, PanelLeft, Plus } from 'lucide-react';
 import { ChatPane } from '@/src/components/copilot/ChatPane';
 import { CanvasPane } from '@/src/components/copilot/CanvasPane';
+import { SessionHistory } from '@/src/components/copilot/SessionHistory';
 import { useCopilotStore } from '@/src/store/copilotStore';
 
 export default function Home() {
   const [chatOpen, setChatOpen] = useState(true);
-  const { clearChat, pinnedBoardItems } = useCopilotStore();
+  const { clearChat } = useCopilotStore();
+
+  const handleNewSession = async () => {
+    try {
+      await fetch('/api/chat/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'new' }),
+      });
+    } catch { /* ignore */ }
+    clearChat();
+  };
 
   return (
     <div className="h-screen overflow-hidden flex flex-col">
-      {/* Global header */}
-      <header className="shrink-0 flex items-center gap-3 px-3 py-2 border-b border-[var(--border)] bg-[var(--chat-bg)]">
+      <header className="shrink-0 flex items-center gap-3 px-3 py-1.5 border-b border-[var(--border)] bg-[var(--chat-bg)]">
         <button
           type="button"
           onClick={() => setChatOpen((o) => !o)}
@@ -23,33 +34,30 @@ export default function Home() {
           {chatOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeft className="w-4 h-4" />}
         </button>
         <span className="text-sm font-semibold text-[var(--text)]">Data Copilot</span>
-        {pinnedBoardItems.length > 0 && (
-          <span className="text-xs rounded-full bg-blue-600/20 text-blue-300 px-2 py-0.5">
-            {pinnedBoardItems.length} on dashboard
-          </span>
-        )}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1">
+          <SessionHistory />
           <button
             type="button"
-            onClick={() => clearChat()}
-            title="Clear chat"
+            onClick={handleNewSession}
+            title="New session"
             className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg text-[var(--text-muted)] hover:bg-white/5 hover:text-[var(--text)] transition-colors"
           >
-            <RotateCcw className="w-3.5 h-3.5" />
-            Clear chat
+            <Plus className="w-3.5 h-3.5" />
+            New session
           </button>
         </div>
       </header>
 
-      {/* Main layout */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
-        {chatOpen && (
-          <aside
-            className="w-[380px] shrink-0 border-r border-[var(--border)] flex flex-col bg-[var(--chat-bg)] transition-all duration-200"
-          >
+        <aside
+          className={`shrink-0 border-r border-[var(--border)] flex flex-col bg-[var(--chat-bg)] transition-all duration-300 ease-in-out overflow-hidden ${
+            chatOpen ? 'w-[380px]' : 'w-0 border-r-0'
+          }`}
+        >
+          <div className="w-[380px] h-full flex flex-col">
             <ChatPane />
-          </aside>
-        )}
+          </div>
+        </aside>
         <main className="flex-1 flex flex-col min-w-0 bg-[var(--canvas-bg)]">
           <CanvasPane />
         </main>

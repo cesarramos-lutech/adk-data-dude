@@ -1,83 +1,72 @@
-"""Dashboard agent: query BigQuery, build charts, give recommendations. All config from env."""
+"""Data Copilot: multi-agent router with specialized sub-agents."""
 
 import logging
 import os
-from typing import Any
 
 from google.adk.agents import LlmAgent
 from google.adk.agents.callback_context import CallbackContext
-from google.adk.tools import BaseTool, ToolContext
-from google.adk.tools.bigquery import BigQueryToolset
-from google.adk.tools.bigquery.config import BigQueryToolConfig, WriteMode
 from google.genai import types
 
-from dashboard_agent.prompts import return_instructions
-from dashboard_agent.tools.bigquery import USER_AGENT, bigquery_nl2sql, get_database_settings
-from dashboard_agent.tools.chart import build_dashboard
-from dashboard_agent.tools.recommend import get_recommendations
+from dashboard_agent.tools.bigquery import get_database_settings
+from dashboard_agent.callbacks import store_results_in_context
+from dashboard_agent.agents.quick_answer import quick_answer_agent
+from dashboard_agent.agents.analysis import analysis_agent
+from dashboard_agent.agents.deep_analysis import deep_analysis_agent
 
 logger = logging.getLogger(__name__)
 
-ADK_BUILTIN_BQ_EXECUTE_SQL_TOOL = "execute_sql"
-
 
 def setup_before_agent_call(callback_context: CallbackContext) -> None:
-    """Inject database_settings into session state before the agent runs.
-
-    This makes the schema and dataset coordinates available to both
-    bigquery_nl2sql (for SQL generation) and execute_sql (for query execution).
-    Runs once per session thanks to the 'not in state' guard.
-    """
+    """Inject database_settings into session state before any agent runs."""
     if "database_settings" not in callback_context.state:
         callback_context.state["database_settings"] = {
             "bigquery": get_database_settings(),
         }
 
 
-def store_results_in_context(
-    tool: BaseTool,
-    args: dict[str, Any],
-    tool_context: ToolContext,
-    tool_response: dict,
-) -> dict | None:
-    """After execute_sql, save rows (or error) into state for downstream tools.
+def _router_instructions() -> str:
+    data_project = os.getenv("BQ_DATA_PROJECT_ID", "")
+    dataset_id = os.getenv("BQ_DATASET_ID", "")
 
-    build_dashboard reads from state instead of accepting rows as a parameter,
-    which avoids passing large data through the LLM.
-    """
-    if tool.name == ADK_BUILTIN_BQ_EXECUTE_SQL_TOOL:
-        if tool_response.get("status") == "SUCCESS":
-            tool_context.state["bigquery_query_result"] = tool_response.get("rows", [])
-            tool_context.state["bigquery_query_error"] = ""
-        else:
-            tool_context.state["bigquery_query_result"] = []
-            error_msg = tool_response.get("error", "Unknown SQL error")
-            tool_context.state["bigquery_query_error"] = error_msg
-            logger.warning("execute_sql failed: %s", error_msg)
-            return {"status": "error", "error": error_msg}
-    return None
+    return f"""You are the Data Copilot — a conversational data expert.
+Your job is to understand what the user needs and route to the right specialist.
 
+**Connected data:** `{data_project}.{dataset_id}`
 
-# BigQueryToolset exposes only execute_sql (read-only via WriteMode.BLOCKED).
-bigquery_toolset = BigQueryToolset(
-    tool_filter=[ADK_BUILTIN_BQ_EXECUTE_SQL_TOOL],
-    bigquery_tool_config=BigQueryToolConfig(
-        write_mode=WriteMode.BLOCKED,
-        application_name=USER_AGENT,
-    ),
-)
+**Routing rules — pick the best agent for each message:**
+
+1. **quick_answer_agent** — for:
+   - Metadata: "what tables do we have?", "describe the orders table"
+   - Simple lookups: "how many rows?", "what was last month's revenue?"
+   - Conversational follow-ups: "what does that mean?", "explain that number"
+   - Greetings, clarifications, or questions that don't need charts
+
+2. **analysis_agent** — for:
+   - Data analysis that benefits from a chart: "show me revenue by region",
+     "top 10 products by sales", "monthly trend for 2024"
+   - Any request that implies a visualization: "chart", "graph", "show me", "plot"
+
+3. **deep_analysis_agent** — for:
+   - Explicit requests for recommendations or strategic advice
+   - "Full analysis", "business review", "deep dive", "comprehensive report"
+   - Questions that ask "why" about trends or ask for actionable next steps
+
+**If in doubt**, prefer quick_answer_agent for simple questions and
+analysis_agent for anything involving data exploration. Only use
+deep_analysis_agent when the user explicitly asks for recommendations
+or a comprehensive analysis.
+
+**Never answer data questions yourself** — always delegate to a sub-agent.
+You may respond directly ONLY for greetings or when asked about your capabilities.
+"""
+
 
 dashboard_agent = LlmAgent(
-    model=os.getenv("ROOT_AGENT_MODEL", "gemini-2.5-pro"),
+    model=os.getenv("ROUTER_MODEL", "gemini-2.5-flash"),
     name="dashboard_agent",
-    instruction=return_instructions(),
-    tools=[
-        bigquery_nl2sql,    # step 1: NL → SQL (restricted to BQ_DATASET_ID)
-        bigquery_toolset,   # step 2: execute the SQL
-        build_dashboard,    # step 3: visualise results
-        get_recommendations,# step 4: business recommendations
-    ],
+    instruction=_router_instructions(),
+    sub_agents=[quick_answer_agent, analysis_agent, deep_analysis_agent],
     before_agent_callback=setup_before_agent_call,
     after_tool_callback=store_results_in_context,
-    generate_content_config=types.GenerateContentConfig(temperature=0.2),
+    generate_content_config=types.GenerateContentConfig(temperature=0.1),
 )

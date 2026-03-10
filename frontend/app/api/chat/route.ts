@@ -66,17 +66,16 @@ function asAdkEvent(value: unknown): AdkEvent | null {
   return value as AdkEvent;
 }
 
-const sessionsByBrowser = new Map<string, SessionState>();
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
-const BROWSER_COOKIE = 'copilot_browser_id';
-const USER_ID = 'user';
-const PINNED_APP_NAME = process.env.ADK_APP_NAME?.trim();
-
-const ADK_BASE_URL = (
-  process.env.ADK_API_BASE_URL ??
-  process.env.NEXT_PUBLIC_ADK_API_BASE_URL ??
-  'http://localhost:8081'
-).replace(/\/+$/, '');
+import {
+  sessionsByBrowser,
+  SESSION_TTL_MS,
+  BROWSER_COOKIE,
+  USER_ID,
+  PINNED_APP_NAME,
+  ADK_BASE_URL,
+  adkFetch as sharedAdkFetch,
+} from './_shared';
+import type { SessionState } from './_shared';
 
 function getTextFromParts(container: unknown): string[] {
   if (!isRecord(container)) return [];
@@ -112,10 +111,42 @@ function normalizeEvents(raw: unknown): AdkEvent[] {
   return [];
 }
 
+function stripLeakedJson(text: string): string {
+  let result = text;
+  const jsonStarts: number[] = [];
+  for (let i = 0; i < result.length; i++) {
+    if (result[i] === '{' && (i === 0 || /[\s\n]/.test(result[i - 1]))) {
+      jsonStarts.push(i);
+    }
+  }
+  const removals: [number, number][] = [];
+  for (const start of jsonStarts) {
+    let depth = 0;
+    let end = -1;
+    for (let i = start; i < result.length; i++) {
+      if (result[i] === '{') depth++;
+      else if (result[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+    }
+    if (end === -1) continue;
+    const block = result.slice(start, end);
+    if (block.length < 200) continue;
+    try {
+      const parsed = JSON.parse(block);
+      if (isRecord(parsed) && ('$schema' in parsed || 'datasets' in parsed || 'config' in parsed || 'vega' in JSON.stringify(parsed).toLowerCase())) {
+        removals.push([start, end]);
+      }
+    } catch { /* not valid JSON, skip */ }
+  }
+  for (let i = removals.length - 1; i >= 0; i--) {
+    result = result.slice(0, removals[i][0]) + result.slice(removals[i][1]);
+  }
+  return result.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function extractAgentText(events: AdkEvent[]): string {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const texts = getTextFromParts(events[i].content);
-    if (texts.length > 0) return texts.join('\n').trim();
+    if (texts.length > 0) return stripLeakedJson(texts.join('\n').trim());
   }
   return 'The agent responded without readable text.';
 }
@@ -580,14 +611,50 @@ function extractPhaseTrace(events: AdkEvent[]): StatusPhase[] {
   return phases;
 }
 
+function extractToolsCalled(events: AdkEvent[]): Set<string> {
+  const tools = new Set<string>();
+  for (const event of events) {
+    for (const part of event.content?.parts ?? []) {
+      if (!isAdkPart(part)) continue;
+      if (part.functionCall?.name) tools.add(part.functionCall.name);
+      if (part.functionResponse?.name) tools.add(part.functionResponse.name);
+    }
+  }
+  return tools;
+}
+
+function classifyResponseType(
+  insight: ApiInsight | null,
+  hasChartCapableData: boolean,
+  narrativeSqlValidated: boolean,
+  events: AdkEvent[],
+): ResponseType {
+  if (!insight) return 'message_only';
+
+  const tools = extractToolsCalled(events);
+  const hasVisualization = tools.has('build_dashboard') || !!insight.vega_spec;
+
+  if (hasVisualization) return 'insight_ready';
+
+  const isMetadataQuery = insight.sql_query?.toLowerCase().includes('information_schema');
+  const isSimpleLookup = (insight.rows?.length ?? 0) <= 3 && !hasVisualization;
+
+  if (isMetadataQuery || isSimpleLookup) return 'answer';
+
+  if (hasChartCapableData || narrativeSqlValidated) return 'insight_ready';
+
+  return 'insight_partial';
+}
+
 function buildUiHints(
   responseType: ResponseType,
   confidence: UiHints['confidence'],
   narrativeSqlValidated = false
 ): UiHints {
+  const isInsight = responseType === 'insight_ready';
   return {
-    auto_open_insight: responseType === 'insight_ready' && confidence !== 'low',
-    pin_allowed: responseType === 'insight_ready',
+    auto_open_insight: isInsight && confidence !== 'low',
+    pin_allowed: isInsight,
     confidence,
     narrative_sql_validated: narrativeSqlValidated,
   };
@@ -621,17 +688,7 @@ async function parseAdkResponse(res: Response): Promise<unknown> {
   return JSON.parse(text);
 }
 
-async function adkFetch(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${ADK_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json, text/event-stream, text/plain, */*',
-      ...(init?.headers ?? {}),
-    },
-    cache: 'no-store',
-  });
-}
+const adkFetch = sharedAdkFetch;
 
 async function getDefaultAppName(): Promise<string> {
   if (PINNED_APP_NAME) return PINNED_APP_NAME;
@@ -792,7 +849,6 @@ export async function POST(request: NextRequest) {
     const globalSql = extractSqlFromAllEvents(events);
     const bestCandidate = selectBestCandidate(extractCandidates(events));
     const { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate, globalSql);
-    // Attach vega spec from build_dashboard if present
     if (insight) {
       const vegaSpec = extractVegaSpec(events);
       if (vegaSpec) insight.vega_spec = vegaSpec;
@@ -802,12 +858,7 @@ export async function POST(request: NextRequest) {
     const hasValidatedSql =
       insight?.sql_status === 'available' || insight?.sql_status === 'derived_from_text';
     const narrativeSqlValidated = !hasChartCapableData && hasNarrative && hasValidatedSql;
-    const responseType: ResponseType =
-      !insight
-        ? 'message_only'
-        : hasChartCapableData || narrativeSqlValidated
-          ? 'insight_ready'
-          : 'insight_partial';
+    const responseType = classifyResponseType(insight, hasChartCapableData, narrativeSqlValidated, events);
     const uiHints = buildUiHints(responseType, confidence, narrativeSqlValidated);
     const meta: ResponseMeta = {
       request_id: requestId,

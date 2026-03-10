@@ -52,3 +52,31 @@ body {
   border: 1px dashed rgba(59, 130, 246, 0.4) !important;
   border-radius: 8px;
 }
+
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+@keyframes msg-slide-in-left {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes msg-slide-in-right {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-msg-left {
+  animation: msg-slide-in-left 0.25s ease-out both;
+}
+.animate-msg-right {
+  animation: msg-slide-in-right 0.25s ease-out both;
+}
+.animate-fade-in-up {
+  animation: fade-in-up 0.3s ease-out both;
+}

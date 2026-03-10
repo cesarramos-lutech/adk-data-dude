@@ -1,24 +1,11 @@
 'use client';
 
-import { useRef, useEffect, useState } from 'react';
-import { Send, Bot, User, RotateCcw } from 'lucide-react';
+import { useRef, useEffect } from 'react';
+import { Send, Bot, User, RotateCcw, Database, ArrowRight } from 'lucide-react';
 import { useCopilotStore } from '@/src/store/copilotStore';
 import { sendChat } from '@/src/services/chatApi';
-import { MiniCard } from './MiniCard';
-
-const phaseLabels: Record<string, string> = {
-  thinking: 'Understanding request',
-  querying: 'Running data query',
-  visualizing: 'Preparing insight view',
-  finalizing: 'Finalizing response',
-};
-
-const responseTypeLabels: Record<string, string> = {
-  message_only: 'Message only',
-  insight_partial: 'Partial insight',
-  insight_ready: 'Insight ready',
-  error: 'Error',
-};
+import { InlineArtifact } from './InlineArtifact';
+import { TypingIndicator } from './TypingIndicator';
 
 export function ChatPane() {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -33,11 +20,10 @@ export function ChatPane() {
     clearError,
     setCurrentInsight,
     setMainMode,
-    statusPhase,
-    phaseTrace,
     lastError,
     lastPrompt,
-    lastResponseType,
+    trackSession,
+    activeSessionId,
   } = useCopilotStore();
 
   useEffect(() => {
@@ -62,7 +48,10 @@ export function ChatPane() {
         meta: res.meta,
         insight: res.insight ?? null,
       });
-      if (res.insight) {
+      if (res.meta?.session_id && !activeSessionId) {
+        trackSession(res.meta.session_id, prompt);
+      }
+      if (res.insight && res.response_type !== 'answer') {
         setCurrentInsight(res.insight);
       }
       if (res.response_type === 'insight_ready' && res.ui_hints.auto_open_insight) {
@@ -100,44 +89,47 @@ export function ChatPane() {
     await sendPrompt(lastPrompt);
   };
 
-  const currentPhaseLabel = statusPhase ? phaseLabels[statusPhase] ?? statusPhase : null;
-  const currentResponseLabel = lastResponseType
-    ? responseTypeLabels[lastResponseType] ?? lastResponseType
-    : null;
-
   return (
     <>
-      <header className="shrink-0 px-4 py-3 border-b border-[var(--border)]">
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-lg font-semibold text-[var(--text)]">Chat</h1>
-          <div className="flex items-center gap-2">
-            {statusPhase && (
-              <span className="text-xs rounded-full bg-white/10 px-2 py-1 text-[var(--text-muted)] capitalize">
-                {currentPhaseLabel}
-              </span>
-            )}
-            {lastResponseType && lastResponseType !== 'error' && (
-              <span className="text-xs rounded-full bg-white/5 px-2 py-1 text-[var(--text-muted)]">
-                {currentResponseLabel}
-              </span>
-            )}
-          </div>
-        </div>
-      </header>
 
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto p-4 space-y-4"
       >
         {chatHistory.length === 0 && (
-          <p className="text-[var(--text-muted)] text-sm pt-8 text-center">
-            Ask a question about your data
-          </p>
+          <div className="flex flex-col items-center gap-5 pt-6 px-2">
+            <div className="flex items-center gap-2 text-[var(--text-muted)]">
+              <Database className="w-5 h-5 text-blue-400" />
+              <span className="text-sm font-medium text-[var(--text)]">Data Copilot</span>
+            </div>
+            <p className="text-[var(--text-muted)] text-xs text-center max-w-[280px]">
+              I can query your data, generate charts, and spot patterns. Try asking:
+            </p>
+            <div className="w-full space-y-1.5">
+              {[
+                'What data do we have?',
+                'Show me monthly revenue trend',
+                'Top 10 products by revenue',
+                'Full analysis of customer retention',
+              ].map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  disabled={isSending}
+                  onClick={() => sendPrompt(suggestion)}
+                  className="w-full flex items-center gap-2 rounded-lg border border-[var(--border)] bg-white/[0.03] px-3 py-2 text-xs text-[var(--text-muted)] hover:bg-white/[0.06] hover:text-[var(--text)] transition-colors text-left disabled:opacity-50"
+                >
+                  <span className="flex-1">{suggestion}</span>
+                  <ArrowRight className="w-3 h-3 opacity-50" />
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {chatHistory.map((msg, i) => (
           <div
             key={i}
-            className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
+            className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse animate-msg-right' : 'animate-msg-left'}`}
           >
             <div
               className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
@@ -160,41 +152,29 @@ export function ChatPane() {
               }`}
             >
               {msg.status === 'loading' && !msg.content ? (
-                <span className="text-sm text-[var(--text-muted)]">
-                  {currentPhaseLabel ?? 'Working on your request...'}
-                </span>
+                <TypingIndicator />
               ) : (
                 <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
               )}
-              {msg.role === 'agent' && msg.insightData && msg.status === 'done' && (
-                <MiniCard
+              {msg.role === 'agent' && msg.insightData && msg.status === 'done' &&
+                (msg.insightData.rows.length > 1 || msg.insightData.vega_spec) && (
+                <InlineArtifact
                   insight={msg.insightData}
-                  onClick={() => handleCardClick(msg.insightData!)}
+                  compact={!msg.insightData.vega_spec && !msg.insightData.recommended_actions?.length}
+                  onExpand={() => handleCardClick(msg.insightData!)}
                 />
               )}
             </div>
           </div>
         ))}
         {isSending && chatHistory[chatHistory.length - 1]?.role !== 'agent' && (
-          <div className="flex gap-3">
+          <div className="flex gap-3 animate-fade-in-up">
             <div className="shrink-0 w-8 h-8 rounded-full bg-[var(--agent-bubble)] flex items-center justify-center">
               <Bot className="w-4 h-4 text-[var(--text-muted)]" />
             </div>
-            <div className="rounded-lg px-3 py-2 bg-[var(--agent-bubble)] text-sm text-[var(--text-muted)]">
-              {currentPhaseLabel ?? 'Working on your request...'}
+            <div className="rounded-lg px-3 py-2 bg-[var(--agent-bubble)]">
+              <TypingIndicator />
             </div>
-          </div>
-        )}
-        {phaseTrace.length > 1 && (
-          <div className="flex flex-wrap gap-2 pt-1">
-            {phaseTrace.map((phase, idx) => (
-              <span
-                key={`${phase}-${idx}`}
-                className="text-[11px] rounded-full bg-white/5 px-2 py-1 text-[var(--text-muted)] capitalize"
-              >
-                {phaseLabels[phase] ?? phase}
-              </span>
-            ))}
           </div>
         )}
       </div>
@@ -232,11 +212,6 @@ export function ChatPane() {
             <Send className="w-5 h-5" />
           </button>
         </div>
-        {isSending && (
-          <p className="mt-2 text-[11px] text-[var(--text-muted)]">
-            Complex questions may take up to a minute while the agent runs tools.
-          </p>
-        )}
       </div>
     </>
   );

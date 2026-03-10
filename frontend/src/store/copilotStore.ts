@@ -17,6 +17,13 @@ export interface ChatMessage {
   insightData?: ApiInsight | null;
 }
 
+export interface SessionMeta {
+  sessionId: string;
+  title: string;
+  createdAt: number;
+  messageCount: number;
+}
+
 export interface GridLayout {
   x: number;
   y: number;
@@ -49,6 +56,9 @@ interface CopilotState {
   clearBoardUndoExpiresAt: number | null;
   clearBoardUndoTimerId: number | null;
 
+  activeSessionId: string | null;
+  sessionHistory: SessionMeta[];
+
   addUserMessage: (content: string) => void;
   setAgentMessage: (content: string, status: 'loading' | 'done', insightData?: ApiInsight | null) => void;
   startRequest: (prompt: string) => void;
@@ -65,12 +75,17 @@ interface CopilotState {
   setCurrentInsight: (insight: ApiInsight | null) => void;
   setMainMode: (mode: MainMode) => void;
   pinCurrentToBoard: (panelType?: PanelType) => void;
+  pinInsightToBoard: (insight: ApiInsight, panelType?: PanelType) => void;
   unpinFromBoard: (id: string) => void;
   clearBoard: () => void;
   clearBoardWithUndoWindow: (windowMs?: number) => void;
   restoreClearedBoard: () => void;
   setSending: (sending: boolean) => void;
   clearChat: () => void;
+  trackSession: (sessionId: string, firstMessage: string) => void;
+  loadSessionChat: (sessionId: string, messages: ChatMessage[]) => void;
+  deleteSessionMeta: (sessionId: string) => void;
+  _hydrateFromStorage: () => void;
 }
 
 let pinnedIdCounter = 0;
@@ -78,6 +93,22 @@ function nextPinnedId(): string {
   pinnedIdCounter += 1;
   return `pinned-${Date.now()}-${pinnedIdCounter}`;
 }
+
+const loadSessionHistory = (): SessionMeta[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem('copilot_session_history');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+};
+
+const saveSessionHistory = (items: SessionMeta[]) => {
+  if (typeof window === 'undefined') return;
+  try { localStorage.setItem('copilot_session_history', JSON.stringify(items.slice(0, 50))); }
+  catch { /* ignore */ }
+};
 
 const loadPinned = (): PinnedBoardItem[] => {
   if (typeof window === 'undefined') return [];
@@ -111,7 +142,7 @@ export const useCopilotStore = create<CopilotState>((set) => ({
   chatHistory: [],
   currentInsight: null,
   mainMode: 'insight',
-  pinnedBoardItems: loadPinned(),
+  pinnedBoardItems: [],
   isSending: false,
   requestState: 'idle',
   statusPhase: null,
@@ -124,6 +155,9 @@ export const useCopilotStore = create<CopilotState>((set) => ({
   lastClearedBoardSnapshot: null,
   clearBoardUndoExpiresAt: null,
   clearBoardUndoTimerId: null,
+
+  activeSessionId: null,
+  sessionHistory: [],
 
   addUserMessage: (content) =>
     set((state) => ({
@@ -170,11 +204,10 @@ export const useCopilotStore = create<CopilotState>((set) => ({
         lastMeta: meta ?? null,
       };
 
-      if (insight) {
+      if (insight && responseType !== 'answer' && responseType !== 'message_only') {
         nextState.currentInsight = insight;
       }
 
-      // Do not force insight mode unless contract explicitly says so.
       if (uiHints?.auto_open_insight && responseType === 'insight_ready') {
         nextState.mainMode = 'insight';
       }
@@ -207,7 +240,6 @@ export const useCopilotStore = create<CopilotState>((set) => ({
     set((state) => {
       const insight = state.currentInsight;
       if (!insight) return state;
-      // Place new panel below existing ones
       const maxY = state.pinnedBoardItems.reduce((acc, p) => Math.max(acc, p.layout.y + p.layout.h), 0);
       const item: PinnedBoardItem = {
         ...insight,
@@ -219,6 +251,26 @@ export const useCopilotStore = create<CopilotState>((set) => ({
       const next = [...state.pinnedBoardItems, item];
       savePinned(next);
       return { pinnedBoardItems: next };
+    }),
+
+  pinInsightToBoard: (insight, panelType) =>
+    set((state) => {
+      const autoType: PanelType = panelType
+        ?? (insight.vega_spec ? 'chart'
+          : insight.insight_summary ? 'narrative'
+          : insight.rows.length > 0 ? 'table'
+          : 'narrative');
+      const maxY = state.pinnedBoardItems.reduce((acc, p) => Math.max(acc, p.layout.y + p.layout.h), 0);
+      const item: PinnedBoardItem = {
+        ...insight,
+        id: nextPinnedId(),
+        pinnedAt: Date.now(),
+        panel_type: autoType,
+        layout: { x: 0, y: maxY, w: 6, h: autoType === 'chart' ? 4 : autoType === 'table' ? 5 : 3 },
+      };
+      const next = [...state.pinnedBoardItems, item];
+      savePinned(next);
+      return { pinnedBoardItems: next, currentInsight: insight };
     }),
 
   unpinFromBoard: (id) =>
@@ -288,8 +340,49 @@ export const useCopilotStore = create<CopilotState>((set) => ({
   setSending: (sending) => set({ isSending: sending }),
 
   clearChat: () =>
+    set((state) => {
+      if (state.activeSessionId && state.chatHistory.length > 0) {
+        const existing = state.sessionHistory.find((s) => s.sessionId === state.activeSessionId);
+        if (existing) {
+          const updated = state.sessionHistory.map((s) =>
+            s.sessionId === state.activeSessionId ? { ...s, messageCount: state.chatHistory.filter((m) => m.role === 'user').length } : s
+          );
+          saveSessionHistory(updated);
+        }
+      }
+      return {
+        chatHistory: [],
+        currentInsight: null,
+        requestState: 'idle',
+        statusPhase: null,
+        phaseTrace: [],
+        lastResponseType: null,
+        lastMeta: null,
+        lastError: null,
+        activeSessionId: null,
+      };
+    }),
+
+  trackSession: (sessionId, firstMessage) =>
+    set((state) => {
+      if (state.sessionHistory.some((s) => s.sessionId === sessionId)) {
+        return { activeSessionId: sessionId };
+      }
+      const meta: SessionMeta = {
+        sessionId,
+        title: firstMessage.length > 60 ? firstMessage.slice(0, 57) + '...' : firstMessage,
+        createdAt: Date.now(),
+        messageCount: 1,
+      };
+      const next = [meta, ...state.sessionHistory].slice(0, 50);
+      saveSessionHistory(next);
+      return { sessionHistory: next, activeSessionId: sessionId };
+    }),
+
+  loadSessionChat: (sessionId, messages) =>
     set({
-      chatHistory: [],
+      chatHistory: messages,
+      activeSessionId: sessionId,
       currentInsight: null,
       requestState: 'idle',
       statusPhase: null,
@@ -298,4 +391,18 @@ export const useCopilotStore = create<CopilotState>((set) => ({
       lastMeta: null,
       lastError: null,
     }),
+
+  deleteSessionMeta: (sessionId) =>
+    set((state) => {
+      const next = state.sessionHistory.filter((s) => s.sessionId !== sessionId);
+      saveSessionHistory(next);
+      return { sessionHistory: next };
+    }),
+
+  _hydrateFromStorage: () =>
+    set({ pinnedBoardItems: loadPinned(), sessionHistory: loadSessionHistory() }),
 }));
+
+if (typeof window !== 'undefined') {
+  useCopilotStore.getState()._hydrateFromStorage();
+}

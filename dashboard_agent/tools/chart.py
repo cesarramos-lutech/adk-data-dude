@@ -124,7 +124,7 @@ def build_dashboard(
             df_chart["__index__"] = range(len(df_chart))
             x_col = "__index__"
         chart_title = f"{y_col} over {x_col}"
-        x_type = "temporal" if (x_col in df_chart.columns and pd.api.types.is_datetime64_any_dtype(df_chart[x_col])) else "quantitative"
+        x_type = _x_type(x_col)
         chart = (
             alt.Chart(df_chart)
             .mark_line(point=True)

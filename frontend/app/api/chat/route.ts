@@ -12,7 +12,6 @@ export const runtime = 'nodejs';
 
 type HistoryItem = { role?: string; content?: string };
 type ChatRequest = { prompt?: string; history?: HistoryItem[] };
-type SessionState = { appName: string; sessionId: string; updatedAt: number };
 type CandidateSource = 'tool_response' | 'state_delta';
 type InsightCandidate = {
   source: CandidateSource;
@@ -132,7 +131,7 @@ function stripLeakedJson(text: string): string {
     if (block.length < 200) continue;
     try {
       const parsed = JSON.parse(block);
-      if (isRecord(parsed) && ('$schema' in parsed || 'datasets' in parsed || 'config' in parsed || 'vega' in JSON.stringify(parsed).toLowerCase())) {
+      if (isRecord(parsed) && ('$schema' in parsed || 'datasets' in parsed || 'config' in parsed || JSON.stringify(parsed).toLowerCase().includes('vega'))) {
         removals.push([start, end]);
       }
     } catch { /* not valid JSON, skip */ }
@@ -149,6 +148,17 @@ function extractAgentText(events: AdkEvent[]): string {
     if (texts.length > 0) return stripLeakedJson(texts.join('\n').trim());
   }
   return 'The agent responded without readable text.';
+}
+
+function extractAgentTextFromEvents(events: AdkEvent[]): string {
+  const allTexts: string[] = [];
+  for (const event of events) {
+    const texts = getTextFromParts(event.content);
+    for (const t of texts) {
+      if (t && !t.startsWith('{')) allTexts.push(t);
+    }
+  }
+  return allTexts.join('\n').trim();
 }
 
 function extractSql(text: string): string {
@@ -578,7 +588,11 @@ function extractVegaSpec(events: AdkEvent[]): Record<string, unknown> | null {
       if (!isAdkPart(part)) continue;
       const fr = part.functionResponse;
       if (fr?.name === 'build_dashboard' && fr.response !== undefined) {
-        const spec = parseJsonStringMaybe(fr.response);
+        let raw: unknown = fr.response;
+        if (isRecord(raw) && typeof (raw as Record<string, unknown>).result === 'string') {
+          raw = (raw as Record<string, unknown>).result;
+        }
+        const spec = parseJsonStringMaybe(raw);
         if (isRecord(spec)) return spec;
       }
     }
@@ -649,14 +663,20 @@ function classifyResponseType(
 function buildUiHints(
   responseType: ResponseType,
   confidence: UiHints['confidence'],
-  narrativeSqlValidated = false
+  narrativeSqlValidated = false,
+  insight?: ApiInsight | null,
 ): UiHints {
   const isInsight = responseType === 'insight_ready';
+  const suggestPin = isInsight && !!(
+    (insight?.key_points?.length ?? 0) >= 2 ||
+    (insight?.recommended_actions?.length ?? 0) >= 1
+  );
   return {
     auto_open_insight: isInsight && confidence !== 'low',
     pin_allowed: isInsight,
     confidence,
     narrative_sql_validated: narrativeSqlValidated,
+    suggest_pin: suggestPin,
   };
 }
 
@@ -827,13 +847,12 @@ export async function POST(request: NextRequest) {
         role: 'user',
         parts: [{ text: prompt }],
       },
-      // Keep false for simpler response handling in this compatibility route.
-      streaming: false,
+      streaming: true,
       stateDelta: null,
       history: body.history ?? [],
     };
 
-    const runRes = await adkFetch('/run', {
+    const runRes = await adkFetch('/run_sse', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
@@ -842,50 +861,123 @@ export async function POST(request: NextRequest) {
       throw new Error(detail || `ADK request failed (${runRes.status})`);
     }
 
-    const adkPayload = await parseAdkResponse(runRes);
-    const events = normalizeEvents(adkPayload);
-    const phaseTrace = extractPhaseTrace(events);
-    const agentMessage = extractAgentText(events);
-    const globalSql = extractSqlFromAllEvents(events);
-    const bestCandidate = selectBestCandidate(extractCandidates(events));
-    const { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate, globalSql);
-    if (insight) {
-      const vegaSpec = extractVegaSpec(events);
-      if (vegaSpec) insight.vega_spec = vegaSpec;
-    }
-    const hasNarrative = !!insight?.insight_summary || (insight?.key_points?.length ?? 0) > 0;
-    const hasChartCapableData = (insight?.rows.length ?? 0) > 0 && (insight?.columns.length ?? 0) > 0;
-    const hasValidatedSql =
-      insight?.sql_status === 'available' || insight?.sql_status === 'derived_from_text';
-    const narrativeSqlValidated = !hasChartCapableData && hasNarrative && hasValidatedSql;
-    const responseType = classifyResponseType(insight, hasChartCapableData, narrativeSqlValidated, events);
-    const uiHints = buildUiHints(responseType, confidence, narrativeSqlValidated);
-    const meta: ResponseMeta = {
-      request_id: requestId,
-      elapsed_ms: Date.now() - start,
-      app_name: session.appName,
-      session_id: session.sessionId,
-    };
+    const cookieHeader = createdBrowserId
+      ? `${BROWSER_COOKIE}=${createdBrowserId}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`
+      : '';
 
-    const response = NextResponse.json({
-      status: 'success',
-      response_type: responseType,
-      agent_message: agentMessage,
-      insight,
-      status_phase: phaseTrace[phaseTrace.length - 1] ?? 'finalizing',
-      phase_trace: phaseTrace,
-      ui_hints: uiHints,
-      meta,
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const sendSSE = (data: unknown) => {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+        };
+
+        try {
+          const allEvents: AdkEvent[] = [];
+          let lastTextSent = '';
+          const reader = runRes.body?.getReader();
+          if (!reader) throw new Error('No response body from ADK');
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith('data:')) continue;
+              const jsonStr = trimmed.slice(5).trim();
+              if (!jsonStr) continue;
+              let parsed: unknown;
+              try { parsed = JSON.parse(jsonStr); } catch { continue; }
+              const event = asAdkEvent(parsed);
+              if (!event) continue;
+              allEvents.push(event);
+
+              const textParts = getTextFromParts(event);
+              if (textParts.length > 0) {
+                const currentText = extractAgentTextFromEvents(allEvents);
+                if (currentText.length > lastTextSent.length) {
+                  sendSSE({ type: 'text_delta', text: currentText });
+                  lastTextSent = currentText;
+                }
+              }
+
+              const parts = event.content?.parts ?? [];
+              for (const part of parts) {
+                if (!isAdkPart(part)) continue;
+                if (part.functionCall?.name) {
+                  sendSSE({ type: 'phase', phase: phaseFromTool(part.functionCall.name) });
+                }
+              }
+            }
+          }
+
+          const events = allEvents;
+          const phaseTrace = extractPhaseTrace(events);
+          const agentMessage = extractAgentText(events);
+          const globalSql = extractSqlFromAllEvents(events);
+          const bestCandidate = selectBestCandidate(extractCandidates(events));
+          const { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate, globalSql);
+          if (insight) {
+            const vegaSpec = extractVegaSpec(events);
+            if (vegaSpec) insight.vega_spec = vegaSpec;
+          }
+          const hasNarrative = !!insight?.insight_summary || (insight?.key_points?.length ?? 0) > 0;
+          const hasChartCapableData = (insight?.rows.length ?? 0) > 0 && (insight?.columns.length ?? 0) > 0;
+          const hasValidatedSql =
+            insight?.sql_status === 'available' || insight?.sql_status === 'derived_from_text';
+          const narrativeSqlValidated = !hasChartCapableData && hasNarrative && hasValidatedSql;
+          const responseType = classifyResponseType(insight, hasChartCapableData, narrativeSqlValidated, events);
+          const uiHints = buildUiHints(responseType, confidence, narrativeSqlValidated, insight);
+          const meta: ResponseMeta = {
+            request_id: requestId,
+            elapsed_ms: Date.now() - start,
+            app_name: session.appName,
+            session_id: session.sessionId,
+          };
+
+          sendSSE({
+            type: 'done',
+            status: 'success',
+            response_type: responseType,
+            agent_message: agentMessage,
+            insight,
+            status_phase: phaseTrace[phaseTrace.length - 1] ?? 'finalizing',
+            phase_trace: phaseTrace,
+            ui_hints: uiHints,
+            meta,
+          });
+        } catch (streamErr) {
+          const message = streamErr instanceof Error ? streamErr.message : 'Stream error';
+          sendSSE({
+            type: 'done',
+            status: 'error',
+            response_type: 'error',
+            error: message,
+            status_phase: 'finalizing',
+            phase_trace: ['thinking', 'finalizing'],
+            ui_hints: { auto_open_insight: false, pin_allowed: false, confidence: 'low', suggest_pin: false },
+            meta: { request_id: requestId, elapsed_ms: Date.now() - start, app_name: session.appName, session_id: session.sessionId },
+          });
+        } finally {
+          controller.close();
+        }
+      },
     });
-    if (createdBrowserId) {
-      response.cookies.set(BROWSER_COOKIE, createdBrowserId, {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        maxAge: 60 * 60 * 24 * 7,
-      });
-    }
-    return response;
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    };
+    if (cookieHeader) headers['Set-Cookie'] = cookieHeader;
+
+    return new Response(stream, { headers });
   } catch (err) {
     console.error('POST /api/chat error:', err);
     const message = err instanceof Error ? err.message : 'Internal server error';

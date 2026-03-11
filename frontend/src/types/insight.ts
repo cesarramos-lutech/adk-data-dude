@@ -77,6 +77,7 @@ export interface UiHints {
   pin_allowed: boolean;
   confidence: 'low' | 'medium' | 'high';
   narrative_sql_validated?: boolean;
+  suggest_pin?: boolean;
 }
 
 export interface ResponseMeta {

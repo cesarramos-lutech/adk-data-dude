@@ -31,24 +31,28 @@ export interface ChatErrorResponse {
 
 export type ChatResponse = ChatSuccessResponse | ChatErrorResponse;
 
-/** Build history for API from store messages (optional context). */
 export function buildHistory(messages: ChatMessage[]): { role: string; content: string }[] {
   return messages
     .filter((m) => m.role && m.content && m.status === 'done')
     .map((m) => ({ role: m.role, content: m.content }));
 }
 
-export async function sendChat(
+export interface StreamCallbacks {
+  onTextDelta: (text: string) => void;
+  onPhase: (phase: StatusPhase) => void;
+  onDone: (response: ChatSuccessResponse) => void;
+  onError: (error: string) => void;
+}
+
+export async function sendChatStream(
   prompt: string,
-  history: ChatMessage[] = []
-): Promise<ChatSuccessResponse> {
+  history: ChatMessage[],
+  callbacks: StreamCallbacks,
+): Promise<void> {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      prompt,
-      history: buildHistory(history),
-    }),
+    body: JSON.stringify({ prompt, history: buildHistory(history) }),
   });
 
   if (!res.ok) {
@@ -60,12 +64,72 @@ export async function sendChat(
     } catch {
       if (text) msg = text.slice(0, 200);
     }
-    throw new Error(msg);
+    callbacks.onError(msg);
+    return;
   }
 
-  const data: ChatResponse = await res.json();
-  if (data.status !== 'success') {
-    throw new Error(data.error || data.agent_message || 'Unknown error');
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!contentType.includes('text/event-stream')) {
+    const data: ChatResponse = await res.json();
+    if (data.status !== 'success') {
+      callbacks.onError(data.error || data.agent_message || 'Unknown error');
+      return;
+    }
+    callbacks.onDone(data);
+    return;
   }
-  return data;
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    callbacks.onError('No response body');
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const jsonStr = trimmed.slice(5).trim();
+      if (!jsonStr) continue;
+      let parsed: Record<string, unknown>;
+      try { parsed = JSON.parse(jsonStr); } catch { continue; }
+
+      if (parsed.type === 'text_delta' && typeof parsed.text === 'string') {
+        callbacks.onTextDelta(parsed.text);
+      } else if (parsed.type === 'phase' && typeof parsed.phase === 'string') {
+        callbacks.onPhase(parsed.phase as StatusPhase);
+      } else if (parsed.type === 'done') {
+        if (parsed.status === 'success') {
+          callbacks.onDone(parsed as unknown as ChatSuccessResponse);
+        } else {
+          callbacks.onError(
+            (parsed.error as string) || (parsed.agent_message as string) || 'Unknown error',
+          );
+        }
+      }
+    }
+  }
+}
+
+export async function sendChat(
+  prompt: string,
+  history: ChatMessage[] = []
+): Promise<ChatSuccessResponse> {
+  return new Promise((resolve, reject) => {
+    sendChatStream(prompt, history, {
+      onTextDelta: () => {},
+      onPhase: () => {},
+      onDone: resolve,
+      onError: (msg) => reject(new Error(msg)),
+    });
+  });
 }

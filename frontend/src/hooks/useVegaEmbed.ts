@@ -20,11 +20,14 @@ export function useVegaEmbed(
   overrides?: { height?: number | 'container'; options?: VegaEmbedOptions }
 ) {
   const ref = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<{ resize: () => void; finalize: () => void } | null>(null);
 
   useEffect(() => {
     if (!spec || !ref.current) return;
     let cancelled = false;
-    let finalizeView: (() => void) | undefined;
+
+    viewRef.current?.finalize();
+    viewRef.current = null;
 
     import('vega-embed').then(({ default: embed }) => {
       if (cancelled || !ref.current) return;
@@ -40,16 +43,30 @@ export function useVegaEmbed(
             result.finalize();
             return;
           }
-          finalizeView = () => result.finalize();
+          viewRef.current = {
+            resize: () => result.view.resize().runAsync(),
+            finalize: () => result.finalize(),
+          };
         })
         .catch((err) => console.error('vega-embed error:', err));
     });
 
     return () => {
       cancelled = true;
-      finalizeView?.();
+      viewRef.current?.finalize();
+      viewRef.current = null;
     };
   }, [spec, overrides?.height]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      viewRef.current?.resize();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   return ref;
 }

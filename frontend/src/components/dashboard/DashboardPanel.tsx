@@ -77,7 +77,7 @@ export function DashboardPanel({ item }: DashboardPanelProps) {
 
   return (
     <>
-      <div className="h-full flex flex-col rounded-lg border border-[var(--border)] bg-[var(--agent-bubble)] overflow-hidden">
+      <div className="h-full flex flex-col rounded-lg border border-[var(--border)] bg-[var(--agent-bubble)]">
         {/* Drag handle / title bar */}
         <div
           className="drag-handle shrink-0 flex items-center gap-2 px-3 py-2 border-b border-[var(--border)] cursor-grab active:cursor-grabbing select-none"
@@ -115,7 +115,7 @@ export function DashboardPanel({ item }: DashboardPanelProps) {
         </div>
 
         {/* Panel content */}
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 overflow-hidden">
           {item.panel_type === 'chart' && <ChartPanel item={item} />}
           {item.panel_type === 'narrative' && <NarrativePanel item={item} />}
           {item.panel_type === 'table' && <TablePanel item={item} />}

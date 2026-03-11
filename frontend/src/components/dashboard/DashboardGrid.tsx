@@ -50,7 +50,7 @@ export function DashboardGrid({ items }: { items: PinnedBoardItem[] }) {
 
   const layout: LayoutItem[] = items.map((item, idx) => {
     const saved = savedLayouts[item.id];
-    if (saved) return { i: item.id, ...saved };
+    if (saved) return { i: item.id, ...saved, minW: 3, minH: 2 };
     const col = (idx % 2) * 6;
     const row = Math.floor(idx / 2) * 5;
     return {
@@ -59,6 +59,8 @@ export function DashboardGrid({ items }: { items: PinnedBoardItem[] }) {
       y: row,
       w: 6,
       h: item.panel_type === 'chart' ? 4 : item.panel_type === 'table' ? 5 : 3,
+      minW: 3,
+      minH: 2,
     };
   });
 

@@ -3,8 +3,9 @@
 import { useRef, useEffect } from 'react';
 import { Send, Bot, User, RotateCcw, Database, ArrowRight } from 'lucide-react';
 import { useCopilotStore } from '@/src/store/copilotStore';
-import { sendChat } from '@/src/services/chatApi';
+import { sendChatStream } from '@/src/services/chatApi';
 import { InlineArtifact } from './InlineArtifact';
+import { InsightRecommendation } from './InsightRecommendation';
 import { TypingIndicator } from './TypingIndicator';
 
 export function ChatPane() {
@@ -24,6 +25,7 @@ export function ChatPane() {
     lastPrompt,
     trackSession,
     activeSessionId,
+    uiHints,
   } = useCopilotStore();
 
   useEffect(() => {
@@ -37,31 +39,36 @@ export function ChatPane() {
     startRequest(prompt);
     setAgentMessage('', 'loading');
 
-    try {
-      const res = await sendChat(prompt, chatHistory);
-      setAgentMessage(res.agent_message, 'done', res.insight ?? null);
-      applyResponseState({
-        responseType: res.response_type,
-        statusPhase: res.status_phase,
-        phaseTrace: res.phase_trace,
-        uiHints: res.ui_hints,
-        meta: res.meta,
-        insight: res.insight ?? null,
-      });
-      if (res.meta?.session_id && !activeSessionId) {
-        trackSession(res.meta.session_id, prompt);
-      }
-      if (res.insight && res.response_type !== 'answer') {
-        setCurrentInsight(res.insight);
-      }
-      if (res.response_type === 'insight_ready' && res.ui_hints.auto_open_insight) {
-        setMainMode('insight');
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Request failed';
-      setAgentMessage(msg, 'done', null);
-      failRequest(msg);
-    }
+    await sendChatStream(prompt, chatHistory, {
+      onTextDelta: (text) => {
+        setAgentMessage(text, 'loading');
+      },
+      onPhase: () => {},
+      onDone: (res) => {
+        setAgentMessage(res.agent_message, 'done', res.insight ?? null);
+        applyResponseState({
+          responseType: res.response_type,
+          statusPhase: res.status_phase,
+          phaseTrace: res.phase_trace,
+          uiHints: res.ui_hints,
+          meta: res.meta,
+          insight: res.insight ?? null,
+        });
+        if (res.meta?.session_id && !activeSessionId) {
+          trackSession(res.meta.session_id, prompt);
+        }
+        if (res.insight && res.response_type !== 'answer') {
+          setCurrentInsight(res.insight);
+        }
+        if (res.response_type === 'insight_ready' && res.ui_hints.auto_open_insight) {
+          setMainMode('insight');
+        }
+      },
+      onError: (msg) => {
+        setAgentMessage(msg, 'done', null);
+        failRequest(msg);
+      },
+    });
   };
 
   const handleSend = async () => {
@@ -163,6 +170,10 @@ export function ChatPane() {
                   compact={!msg.insightData.vega_spec && !msg.insightData.recommended_actions?.length}
                   onExpand={() => handleCardClick(msg.insightData!)}
                 />
+              )}
+              {msg.role === 'agent' && msg.status === 'done' && msg.insightData?.insight_summary &&
+                i === chatHistory.length - 1 && uiHints?.suggest_pin && (
+                <InsightRecommendation insight={msg.insightData} />
               )}
             </div>
           </div>

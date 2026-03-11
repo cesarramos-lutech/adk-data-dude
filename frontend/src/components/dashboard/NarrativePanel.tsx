@@ -6,9 +6,9 @@ export function NarrativePanel({ item }: { item: PinnedBoardItem }) {
   const { insight_summary, key_points, recommended_actions } = item;
 
   return (
-    <div className="h-full overflow-auto p-3 text-sm space-y-3">
+    <div className="h-full overflow-auto p-3 text-sm space-y-2">
       {insight_summary && (
-        <p className="text-[var(--text)] leading-relaxed">{insight_summary}</p>
+        <p className="text-[var(--text)] text-xs leading-relaxed line-clamp-3">{insight_summary}</p>
       )}
       {key_points && key_points.length > 0 && (
         <div>

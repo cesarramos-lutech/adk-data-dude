@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Presentation, X, Trash2, LayoutGrid } from 'lucide-react';
 import { useCopilotStore } from '@/src/store/copilotStore';
 import { toastManager } from '@/src/utils/ToastManager';
@@ -9,6 +9,8 @@ import { DashboardGrid } from '@/src/components/dashboard/DashboardGrid';
 export function MyBoardView() {
   const { pinnedBoardItems, clearBoardWithUndoWindow, restoreClearedBoard } = useCopilotStore();
   const [presenting, setPresenting] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const clearTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   const exitPresent = useCallback(() => setPresenting(false), []);
 
@@ -22,10 +24,17 @@ export function MyBoardView() {
   }, [presenting, exitPresent]);
 
   const handleClearBoard = () => {
+    if (!confirmingClear) {
+      setConfirmingClear(true);
+      clearTimerRef.current = setTimeout(() => setConfirmingClear(false), 3000);
+      return;
+    }
+    clearTimeout(clearTimerRef.current);
+    setConfirmingClear(false);
     clearBoardWithUndoWindow(10000);
     toastManager.show({
       message: 'Board cleared',
-      type: 'warning',
+      type: 'info',
       durationMs: 10000,
       action: {
         label: 'Undo',
@@ -52,7 +61,7 @@ export function MyBoardView() {
     return (
       <div className="fixed inset-0 z-50 bg-[var(--canvas-bg)] flex flex-col">
         <div className="shrink-0 flex items-center justify-between px-6 py-3">
-          <span className="text-sm font-semibold text-[var(--text)]">Data Copilot Board</span>
+          <span className="text-sm font-semibold text-[var(--text)]">Data Dude Board</span>
           <button
             type="button"
             onClick={exitPresent}
@@ -87,10 +96,14 @@ export function MyBoardView() {
           <button
             type="button"
             onClick={handleClearBoard}
-            className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border border-red-800/50 bg-red-900/20 hover:bg-red-900/30 text-red-200 transition-colors"
+            className={`inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-colors ${
+              confirmingClear
+                ? 'border-red-500 bg-red-600/30 text-red-100 animate-pulse'
+                : 'border-red-800/50 bg-red-900/20 hover:bg-red-900/30 text-red-200'
+            }`}
           >
             <Trash2 className="w-3 h-3" />
-            Clear
+            {confirmingClear ? 'Tap again' : 'Clear'}
           </button>
         </div>
       </div>

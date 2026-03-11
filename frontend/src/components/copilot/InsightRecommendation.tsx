@@ -11,16 +11,13 @@ interface InsightRecommendationProps {
 }
 
 function condenseSummary(insight: ApiInsight): string {
-  const summary = insight.insight_summary?.trim() ?? '';
-  const firstSentence = summary.split(/(?<=[.!?])\s+/)[0] ?? summary;
-  const truncated = firstSentence.length > 160
-    ? firstSentence.slice(0, 157) + '...'
-    : firstSentence;
-  return truncated;
+  return insight.insight_summary?.trim() ?? '';
 }
 
 function condenseKeyPoints(insight: ApiInsight): string[] {
-  return (insight.key_points ?? []).slice(0, 2);
+  return (insight.key_points ?? []).slice(0, 3).map((pt) =>
+    pt.replace(/\*\*/g, '').trim(),
+  );
 }
 
 export function InsightRecommendation({ insight }: InsightRecommendationProps) {

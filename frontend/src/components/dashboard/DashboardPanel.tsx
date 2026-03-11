@@ -1,19 +1,35 @@
 'use client';
 
 import { useState } from 'react';
-import { X, Maximize2, MessageSquare } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { X, Maximize2, MessageSquare, BarChart3, FileText, Table2, Code2 } from 'lucide-react';
 import type { PinnedBoardItem } from '@/src/store/copilotStore';
 import { useCopilotStore } from '@/src/store/copilotStore';
+import type { ReactNode } from 'react';
 import { ChartPanel } from './ChartPanel';
 import { NarrativePanel } from './NarrativePanel';
 import { TablePanel } from './TablePanel';
 import { SqlPanel } from './SqlPanel';
 
-const PANEL_ICONS: Record<string, string> = {
-  chart: '📊',
-  narrative: '📝',
-  table: '🗂',
-  sql: '💾',
+const PANEL_ICONS: Record<string, ReactNode> = {
+  chart:     <BarChart3 className="w-3.5 h-3.5 text-blue-400" />,
+  narrative: <FileText className="w-3.5 h-3.5 text-emerald-400" />,
+  table:     <Table2 className="w-3.5 h-3.5 text-amber-400" />,
+  sql:       <Code2 className="w-3.5 h-3.5 text-purple-400" />,
+};
+
+const ACCENT_COLORS: Record<string, string> = {
+  chart: 'border-t-blue-500',
+  narrative: 'border-t-emerald-500',
+  table: 'border-t-amber-500',
+  sql: 'border-t-purple-500',
+};
+
+const TAB_LABELS: Record<string, string> = {
+  chart: 'Chart',
+  narrative: 'Narrative',
+  table: 'Table',
+  sql: 'SQL',
 };
 
 interface DashboardPanelProps {
@@ -40,9 +56,9 @@ function ExpandModal({ item, onClose }: { item: PinnedBoardItem; onClose: () => 
                 key={t}
                 type="button"
                 onClick={() => setTab(t)}
-                className={`px-2 py-1 rounded text-xs ${tab === t ? 'bg-[var(--agent-bubble)] text-[var(--text)]' : 'text-[var(--text-muted)] hover:bg-white/5'}`}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs ${tab === t ? 'bg-[var(--agent-bubble)] text-[var(--text)]' : 'text-[var(--text-muted)] hover:bg-white/5'}`}
               >
-                {PANEL_ICONS[t]} {t}
+                {PANEL_ICONS[t]} {TAB_LABELS[t]}
               </button>
             ))}
             <button type="button" onClick={onClose} className="ml-2 p-1 rounded hover:bg-white/10 text-[var(--text-muted)]">
@@ -77,13 +93,13 @@ export function DashboardPanel({ item }: DashboardPanelProps) {
 
   return (
     <>
-      <div className="h-full flex flex-col rounded-lg border border-[var(--border)] bg-[var(--agent-bubble)]">
+      <div className={`h-full flex flex-col rounded-lg border border-t-2 ${ACCENT_COLORS[item.panel_type] ?? ''} border-[var(--card-border)] bg-[var(--card-bg)] shadow-lg shadow-black/20`}>
         {/* Drag handle / title bar */}
         <div
-          className="drag-handle shrink-0 flex items-center gap-2 px-3 py-2 border-b border-[var(--border)] cursor-grab active:cursor-grabbing select-none"
+          className="drag-handle shrink-0 flex items-center gap-2 px-3 py-2.5 border-b border-[var(--card-border)] cursor-grab active:cursor-grabbing select-none"
         >
-          <span className="text-sm">{PANEL_ICONS[item.panel_type]}</span>
-          <h3 className="flex-1 text-xs font-medium text-[var(--text)] truncate leading-snug">
+          <span className="shrink-0">{PANEL_ICONS[item.panel_type]}</span>
+          <h3 className="flex-1 text-xs font-medium text-[var(--text)] line-clamp-2 leading-snug" title={item.title}>
             {item.title}
           </h3>
           <div className="flex items-center gap-1 shrink-0">
@@ -115,7 +131,7 @@ export function DashboardPanel({ item }: DashboardPanelProps) {
         </div>
 
         {/* Panel content */}
-        <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-auto">
           {item.panel_type === 'chart' && <ChartPanel item={item} />}
           {item.panel_type === 'narrative' && <NarrativePanel item={item} />}
           {item.panel_type === 'table' && <TablePanel item={item} />}
@@ -123,7 +139,10 @@ export function DashboardPanel({ item }: DashboardPanelProps) {
         </div>
       </div>
 
-      {expanded && <ExpandModal item={item} onClose={() => setExpanded(false)} />}
+      {expanded && createPortal(
+        <ExpandModal item={item} onClose={() => setExpanded(false)} />,
+        document.body
+      )}
     </>
   );
 }

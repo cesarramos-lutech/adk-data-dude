@@ -33,7 +33,7 @@ export default function Home() {
         >
           {chatOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeft className="w-4 h-4" />}
         </button>
-        <span className="text-sm font-semibold text-[var(--text)]">Data Copilot</span>
+        <span className="text-sm font-semibold text-[var(--text)]">Data Dude</span>
         <div className="ml-auto flex items-center gap-1">
           <SessionHistory />
           <button

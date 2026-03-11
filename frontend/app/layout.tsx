@@ -3,7 +3,7 @@ import './globals.css';
 import { GlobalToast } from '@/src/components/GlobalToast';
 
 export const metadata: Metadata = {
-  title: 'Enterprise Data Copilot',
+  title: 'Data Dude',
   description: 'Generative BI — ask questions, view insights.',
 };
 

@@ -107,7 +107,7 @@ export function ChatPane() {
           <div className="flex flex-col items-center gap-5 pt-6 px-2">
             <div className="flex items-center gap-2 text-[var(--text-muted)]">
               <Database className="w-5 h-5 text-blue-400" />
-              <span className="text-sm font-medium text-[var(--text)]">Data Copilot</span>
+              <span className="text-sm font-medium text-[var(--text)]">Data Dude</span>
             </div>
             <p className="text-[var(--text-muted)] text-xs text-center max-w-[280px]">
               I can query your data, generate charts, and spot patterns. Try asking:

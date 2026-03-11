@@ -26,6 +26,11 @@ from google.adk.tools import ToolContext
 logger = logging.getLogger(__name__)
 
 
+def _humanize(col: str) -> str:
+    """Convert snake_case column name to Title Case label."""
+    return col.replace("_", " ").title()
+
+
 def _to_dataframe(query_result: list) -> pd.DataFrame:
     """Convert list of rows to DataFrame."""
     if isinstance(query_result, list):
@@ -79,7 +84,7 @@ def build_dashboard(
         chart_type = "scatter" if (y_col and pd.api.types.is_numeric_dtype(df[x_col]) and pd.api.types.is_numeric_dtype(df[y_col])) else "bar"
     # Limit rows and use DataFrame directly so Altair infers types for tooltips
     df_chart = df.head(500).copy()
-    chart_title = f"{y_col} by {x_col}" if y_col else x_col
+    chart_title = f"{_humanize(y_col)} by {_humanize(x_col)}" if y_col else _humanize(x_col)
 
     def _x_type(col: str) -> str:
         if pd.api.types.is_datetime64_any_dtype(df_chart[col]):
@@ -94,8 +99,8 @@ def build_dashboard(
                 alt.Chart(df_chart)
                 .mark_bar()
                 .encode(
-                    x=alt.X(x_col, type=_x_type(x_col), title=x_col),
-                    y=alt.Y(y_col, type="quantitative", title=y_col),
+                    x=alt.X(x_col, type=_x_type(x_col), title=_humanize(x_col)),
+                    y=alt.Y(y_col, type="quantitative", title=_humanize(y_col)),
                     tooltip=[x_col, y_col],
                 )
                 .properties(title=chart_title)
@@ -105,7 +110,7 @@ def build_dashboard(
                 alt.Chart(df_chart)
                 .mark_bar()
                 .encode(
-                    x=alt.X(x_col, type="nominal", title=x_col),
+                    x=alt.X(x_col, type="nominal", title=_humanize(x_col)),
                     y=alt.Y("count():Q", title="Count"),
                     tooltip=[x_col, "count():Q"],
                 )
@@ -123,27 +128,27 @@ def build_dashboard(
         if x_col == y_col:
             df_chart["__index__"] = range(len(df_chart))
             x_col = "__index__"
-        chart_title = f"{y_col} over {x_col}"
+        chart_title = f"{_humanize(y_col)} over {_humanize(x_col)}"
         x_type = _x_type(x_col)
         chart = (
             alt.Chart(df_chart)
             .mark_line(point=True)
             .encode(
-                x=alt.X(x_col, type=x_type, title=x_col),
-                y=alt.Y(y_col, type="quantitative", title=y_col),
+                x=alt.X(x_col, type=x_type, title=_humanize(x_col)),
+                y=alt.Y(y_col, type="quantitative", title=_humanize(y_col)),
                 tooltip=[x_col, y_col],
             )
             .properties(title=chart_title)
         )
     elif chart_type == "scatter":
         y_col = y_col or (df_chart.columns[1] if len(df_chart.columns) > 1 else df_chart.columns[0])
-        chart_title = f"{y_col} vs {x_col}"
+        chart_title = f"{_humanize(y_col)} vs {_humanize(x_col)}"
         chart = (
             alt.Chart(df_chart)
             .mark_circle(size=60)
             .encode(
-                x=alt.X(x_col, type="quantitative", title=x_col),
-                y=alt.Y(y_col, type="quantitative", title=y_col),
+                x=alt.X(x_col, type="quantitative", title=_humanize(x_col)),
+                y=alt.Y(y_col, type="quantitative", title=_humanize(y_col)),
                 tooltip=[x_col, y_col],
             )
             .properties(title=chart_title)
@@ -154,8 +159,8 @@ def build_dashboard(
                 alt.Chart(df_chart)
                 .mark_bar()
                 .encode(
-                    x=alt.X(x_col, type="nominal", title=x_col),
-                    y=alt.Y(y_col, type="quantitative", title=y_col),
+                    x=alt.X(x_col, type="nominal", title=_humanize(x_col)),
+                    y=alt.Y(y_col, type="quantitative", title=_humanize(y_col)),
                     tooltip=[x_col, y_col],
                 )
                 .properties(title=chart_title)
@@ -165,7 +170,7 @@ def build_dashboard(
                 alt.Chart(df_chart)
                 .mark_bar()
                 .encode(
-                    x=alt.X(x_col, type="nominal", title=x_col),
+                    x=alt.X(x_col, type="nominal", title=_humanize(x_col)),
                     y=alt.Y("count():Q", title="Count"),
                 )
                 .properties(title=chart_title)

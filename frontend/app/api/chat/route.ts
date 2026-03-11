@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import type {
   ApiInsight,
   ResponseMeta,
@@ -522,6 +523,73 @@ function buildInsightFromCandidate(
   };
 }
 
+function isNarrativeWorthy(text: string): boolean {
+  if (text.length < 200) return false;
+  const bullets = text.match(/^[\s]*(?:[-*]|\d+[.)]\s)\s*.+/gm) ?? [];
+  const headings = [
+    ...(text.match(/^#{1,4}\s+.+/gm) ?? []),
+    ...(text.match(/^\s*\*\*[^*]+:\*\*/gm) ?? []),
+  ];
+  return bullets.length >= 2 || headings.length > 0;
+}
+
+async function summarizeWithGemini(prompt: string, text: string): Promise<ApiInsight | null> {
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const genai = new GoogleGenerativeAI(apiKey);
+    const model = genai.getGenerativeModel({ model: 'gemini-2.0-flash' });
+
+    const result = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text:
+        `You are a business analyst. The user asked: "${prompt}"
+
+The AI agent responded with the following analysis:
+---
+${text.slice(0, 2000)}
+---
+
+Produce a JSON object with this exact structure (no markdown fences, only valid JSON):
+{
+  "insight_summary": "<1-2 sentence executive summary of the key finding>",
+  "key_points": ["<concise point 1, max 80 chars>", "<concise point 2, max 80 chars>", "<concise point 3, max 80 chars>"],
+  "recommended_actions": ["<action 1, max 80 chars>", "<action 2, max 80 chars>"]
+}
+
+Rules:
+- insight_summary must be 1-2 sentences, max 150 characters
+- Each key_point must be a SHORT headline-style phrase, max 80 characters
+- recommended_actions can be empty [] if no actions are mentioned
+- Do NOT copy the original text verbatim — summarize and condense`
+      }] }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 500 },
+    });
+
+    const raw = result.response.text().trim();
+    const cleaned = raw.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '').trim();
+    const parsed = JSON.parse(cleaned);
+
+    const title = prompt.length > 80 ? prompt.slice(0, 77) + '...' : prompt;
+
+    return {
+      title,
+      sql_query: '',
+      sql_status: 'missing_backend',
+      columns: [],
+      rows: [],
+      suggested_chart_type: 'table',
+      insight_summary: typeof parsed.insight_summary === 'string' ? parsed.insight_summary : undefined,
+      key_points: Array.isArray(parsed.key_points) ? parsed.key_points.filter((p: unknown) => typeof p === 'string').slice(0, 4) : [],
+      recommended_actions: Array.isArray(parsed.recommended_actions) ? parsed.recommended_actions.filter((a: unknown) => typeof a === 'string').slice(0, 3) : [],
+      visualization_mode: 'narrative',
+    };
+  } catch (err) {
+    console.error('summarizeWithGemini failed:', err);
+    return null;
+  }
+}
+
 function scoreCandidate(candidate: InsightCandidate): number {
   const rows = extractRowsFromPayload(candidate.payload);
   const sql = extractSqlFromPayload(candidate.payload);
@@ -650,10 +718,15 @@ function classifyResponseType(
 
   if (hasVisualization) return 'insight_ready';
 
+  const hasRichNarrative = (insight.key_points?.length ?? 0) >= 2
+    || (insight.recommended_actions?.length ?? 0) >= 1;
+
+  if (hasRichNarrative && insight.visualization_mode === 'narrative') return 'insight_partial';
+
   const isMetadataQuery = insight.sql_query?.toLowerCase().includes('information_schema');
   const isSimpleLookup = (insight.rows?.length ?? 0) <= 3 && !hasVisualization;
 
-  if (isMetadataQuery || isSimpleLookup) return 'answer';
+  if ((isMetadataQuery || isSimpleLookup) && !hasRichNarrative) return 'answer';
 
   if (hasChartCapableData || narrativeSqlValidated) return 'insight_ready';
 
@@ -667,13 +740,14 @@ function buildUiHints(
   insight?: ApiInsight | null,
 ): UiHints {
   const isInsight = responseType === 'insight_ready';
-  const suggestPin = isInsight && !!(
+  const isNarrativePartial = responseType === 'insight_partial';
+  const suggestPin = (isInsight || isNarrativePartial) && !!(
     (insight?.key_points?.length ?? 0) >= 2 ||
     (insight?.recommended_actions?.length ?? 0) >= 1
   );
   return {
     auto_open_insight: isInsight && confidence !== 'low',
-    pin_allowed: isInsight,
+    pin_allowed: isInsight || isNarrativePartial,
     confidence,
     narrative_sql_validated: narrativeSqlValidated,
     suggest_pin: suggestPin,
@@ -922,10 +996,17 @@ export async function POST(request: NextRequest) {
           const agentMessage = extractAgentText(events);
           const globalSql = extractSqlFromAllEvents(events);
           const bestCandidate = selectBestCandidate(extractCandidates(events));
-          const { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate, globalSql);
+          let { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate, globalSql);
           if (insight) {
             const vegaSpec = extractVegaSpec(events);
             if (vegaSpec) insight.vega_spec = vegaSpec;
+          }
+          if (!insight && isNarrativeWorthy(agentMessage)) {
+            const narrativeInsight = await summarizeWithGemini(prompt, agentMessage);
+            if (narrativeInsight) {
+              insight = narrativeInsight;
+              confidence = 'medium';
+            }
           }
           const hasNarrative = !!insight?.insight_summary || (insight?.key_points?.length ?? 0) > 0;
           const hasChartCapableData = (insight?.rows.length ?? 0) > 0 && (insight?.columns.length ?? 0) > 0;

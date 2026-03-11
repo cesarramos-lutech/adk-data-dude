@@ -3,6 +3,7 @@
 import type { PinnedBoardItem } from '@/src/store/copilotStore';
 import { useVegaEmbed } from '@/src/hooks/useVegaEmbed';
 import { DASHBOARD_MIN_CHART_HEIGHT } from '@/src/lib/chartConstants';
+import { humanizeLabel } from '@/src/lib/formatLabel';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
 
 export function ChartPanel({ item }: { item: PinnedBoardItem }) {
@@ -37,8 +38,20 @@ export function ChartPanel({ item }: { item: PinnedBoardItem }) {
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 20 }}>
-        <XAxis dataKey="name" stroke="#9ca3af" tick={{ fontSize: 10 }} angle={-30} textAnchor="end" height={40} />
-        <YAxis stroke="#9ca3af" tick={{ fontSize: 10 }} />
+        <XAxis
+          dataKey="name"
+          stroke="#9ca3af"
+          tick={{ fontSize: 10 }}
+          angle={-45}
+          textAnchor="end"
+          height={60}
+          tickFormatter={(v: string) => {
+            const h = humanizeLabel(v);
+            return h.length > 15 ? h.slice(0, 14) + '\u2026' : h;
+          }}
+          interval={data.length > 12 ? 1 : 0}
+        />
+        <YAxis stroke="#9ca3af" tick={{ fontSize: 10 }} label={{ value: humanizeLabel(yKey), angle: -90, position: 'insideLeft', style: { fill: '#9ca3af', fontSize: 10 } }} />
         <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151' }} />
         <Bar dataKey="value" fill="#3b82f6" radius={[3, 3, 0, 0]} />
       </BarChart>

@@ -97,7 +97,7 @@ export function DashboardGrid({ items }: { items: PinnedBoardItem[] }) {
         }}
       >
         {items.map((item) => (
-          <div key={item.id}>
+          <div key={item.id} className="overflow-hidden rounded-lg">
             <DashboardPanel item={item} />
           </div>
         ))}

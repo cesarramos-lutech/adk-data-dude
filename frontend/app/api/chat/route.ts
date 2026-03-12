@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import type {
   ApiInsight,
+  ChartMeta,
   ResponseMeta,
   ResponseType,
   SqlStatus,
@@ -132,7 +133,7 @@ function stripLeakedJson(text: string): string {
     if (block.length < 200) continue;
     try {
       const parsed = JSON.parse(block);
-      if (isRecord(parsed) && ('$schema' in parsed || 'datasets' in parsed || 'config' in parsed || JSON.stringify(parsed).toLowerCase().includes('vega'))) {
+      if (isRecord(parsed) && ('$schema' in parsed || 'datasets' in parsed || 'config' in parsed || 'chart_type' in parsed)) {
         removals.push([start, end]);
       }
     } catch { /* not valid JSON, skip */ }
@@ -642,12 +643,26 @@ function selectBestCandidate(candidates: InsightCandidate[]): InsightCandidate |
   return best;
 }
 
-function extractVegaSpec(events: AdkEvent[]): Record<string, unknown> | null {
+function toChartMeta(parsed: Record<string, unknown>): ChartMeta | null {
+  if (typeof parsed.chart_type !== 'string') return null;
+  return {
+    chart_type: parsed.chart_type as ChartMeta['chart_type'],
+    x_col: typeof parsed.x_col === 'string' ? parsed.x_col : undefined,
+    y_col: typeof parsed.y_col === 'string' ? parsed.y_col : undefined,
+    title: typeof parsed.title === 'string' ? parsed.title : undefined,
+    data: Array.isArray(parsed.data) ? parsed.data : undefined,
+  };
+}
+
+function extractChartMeta(events: AdkEvent[]): ChartMeta | null {
   for (const event of events) {
     const delta = event.actions?.stateDelta;
-    if (delta?.vega_lite_spec) {
-      const spec = parseJsonStringMaybe(delta.vega_lite_spec);
-      if (isRecord(spec)) return spec;
+    if (delta?.chart_meta) {
+      const meta = parseJsonStringMaybe(delta.chart_meta);
+      if (isRecord(meta)) {
+        const cm = toChartMeta(meta as Record<string, unknown>);
+        if (cm) return cm;
+      }
     }
   }
   for (const event of events) {
@@ -660,8 +675,11 @@ function extractVegaSpec(events: AdkEvent[]): Record<string, unknown> | null {
         if (isRecord(raw) && typeof (raw as Record<string, unknown>).result === 'string') {
           raw = (raw as Record<string, unknown>).result;
         }
-        const spec = parseJsonStringMaybe(raw);
-        if (isRecord(spec)) return spec;
+        const meta = parseJsonStringMaybe(raw);
+        if (isRecord(meta)) {
+          const cm = toChartMeta(meta as Record<string, unknown>);
+          if (cm) return cm;
+        }
       }
     }
   }
@@ -714,7 +732,7 @@ function classifyResponseType(
   if (!insight) return 'message_only';
 
   const tools = extractToolsCalled(events);
-  const hasVisualization = tools.has('build_dashboard') || !!insight.vega_spec;
+  const hasVisualization = tools.has('build_dashboard') || !!insight.chart_meta;
 
   if (hasVisualization) return 'insight_ready';
 
@@ -774,7 +792,7 @@ async function parseAdkResponse(res: Response): Promise<unknown> {
       })
       .filter(Boolean);
     // Return ALL events so extractCandidates can find tool responses + state deltas
-    // from intermediate events (e.g. build_dashboard's vega spec).
+    // from intermediate events (e.g. build_dashboard's chart metadata).
     return parsed.length > 0 ? parsed : [{}];
   }
   const text = await res.text();
@@ -998,8 +1016,14 @@ export async function POST(request: NextRequest) {
           const bestCandidate = selectBestCandidate(extractCandidates(events));
           let { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate, globalSql);
           if (insight) {
-            const vegaSpec = extractVegaSpec(events);
-            if (vegaSpec) insight.vega_spec = vegaSpec;
+            const chartMeta = extractChartMeta(events);
+            if (chartMeta) {
+              insight.chart_meta = chartMeta;
+              if (insight.rows.length === 0 && chartMeta.data?.length) {
+                insight.rows = chartMeta.data;
+                insight.columns = Object.keys(chartMeta.data[0] ?? {});
+              }
+            }
           }
           if (!insight && isNarrativeWorthy(agentMessage)) {
             const narrativeInsight = await summarizeWithGemini(prompt, agentMessage);

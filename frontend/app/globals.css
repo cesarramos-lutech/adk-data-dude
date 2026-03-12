@@ -20,22 +20,6 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Recharts container */
-.recharts-wrapper {
-  width: 100% !important;
-}
-.recharts-surface {
-  overflow: visible;
-}
-
-/* Vega-embed dark theme overrides */
-.vega-embed {
-  width: 100%;
-}
-.vega-embed summary {
-  display: none;
-}
-
 /* react-grid-layout resize handle */
 .react-resizable-handle {
   background-image: none !important;

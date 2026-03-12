@@ -256,7 +256,8 @@ export const useCopilotStore = create<CopilotState>((set) => ({
   pinInsightToBoard: (insight, panelType) =>
     set((state) => {
       const autoType: PanelType = panelType
-        ?? (insight.vega_spec ? 'chart'
+        ?? (insight.chart_meta ? 'chart'
+          : (insight.rows.length > 0 && insight.columns.length > 1) ? 'chart'
           : insight.insight_summary ? 'narrative'
           : insight.rows.length > 0 ? 'table'
           : 'narrative');

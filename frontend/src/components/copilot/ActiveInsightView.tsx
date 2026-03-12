@@ -52,8 +52,8 @@ function SkeletonInsight() {
   );
 }
 
-function autoSelectTab(insight: { vega_spec?: unknown; rows: unknown[]; columns: string[]; insight_summary?: string }): TabId {
-  if (insight.vega_spec) return 'chart';
+function autoSelectTab(insight: { chart_meta?: unknown; rows: unknown[]; columns: string[]; insight_summary?: string }): TabId {
+  if (insight.chart_meta) return 'chart';
   if (insight.rows.length > 0 && insight.columns.length > 0) return 'table';
   if (insight.insight_summary) return 'insight';
   return 'chart';
@@ -123,7 +123,7 @@ export function ActiveInsightView() {
     );
   }
 
-  const hasChart = !!currentInsight.vega_spec;
+  const hasChart = !!currentInsight.chart_meta || (currentInsight.rows.length > 0 && currentInsight.columns.length > 1);
   const hasTable = currentInsight.rows.length > 0 && currentInsight.columns.length > 0;
   const hasSql = !!currentInsight.sql_query?.trim();
   const hasNarrative = !!currentInsight.insight_summary;

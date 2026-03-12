@@ -42,7 +42,9 @@ NEVER reference any other project or dataset in your SQL.
    - "line" for trends over time (time-series data)
    - "bar" for category comparisons (rankings, breakdowns by dimension)
    - "scatter" for correlations between two numeric variables
+   - "pie" for parts-of-whole distributions (market share, composition)
    - Default to "bar" when uncertain.
+   If the user explicitly requests a specific chart type, always use that.
 4. **Recommend** — Call `get_recommendations` with the original question and a
    concise data summary to surface 2–3 actionable business insights.
 

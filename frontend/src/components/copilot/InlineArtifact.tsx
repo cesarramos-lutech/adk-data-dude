@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { BarChart3, Pin, Maximize2, Check, Table, FileText } from 'lucide-react';
 import type { ApiInsight } from '@/src/types/insight';
-import { useVegaEmbed } from '@/src/hooks/useVegaEmbed';
+import { NivoChart } from '@/src/components/charts/NivoChart';
 import { useCopilotStore } from '@/src/store/copilotStore';
 import { toastManager } from '@/src/utils/ToastManager';
 
@@ -11,11 +11,6 @@ interface InlineArtifactProps {
   insight: ApiInsight;
   onExpand: () => void;
   compact?: boolean;
-}
-
-function MiniChartPreview({ spec }: { spec: Record<string, unknown> }) {
-  const ref = useVegaEmbed(spec, { height: 160 });
-  return <div ref={ref} className="w-full min-h-[160px] rounded overflow-hidden" />;
 }
 
 function MiniTablePreview({ insight }: { insight: ApiInsight }) {
@@ -74,7 +69,7 @@ export function InlineArtifact({ insight, onExpand, compact = false }: InlineArt
     setMainMode('board');
   };
 
-  const hasChart = !!insight.vega_spec;
+  const hasChart = !!insight.chart_meta || (insight.rows.length > 0 && insight.columns.length > 1);
   const hasTable = insight.rows.length > 0 && insight.columns.length > 0;
   const hasNarrative = !!insight.insight_summary;
 
@@ -96,8 +91,13 @@ export function InlineArtifact({ insight, onExpand, compact = false }: InlineArt
       </div>
 
       {hasChart && (
-        <div className="px-2 py-2">
-          <MiniChartPreview spec={insight.vega_spec!} />
+        <div className="px-2 py-2 h-[180px]">
+          <NivoChart
+            rows={insight.rows}
+            columns={insight.columns}
+            chartMeta={insight.chart_meta}
+            compact
+          />
         </div>
       )}
       {!hasChart && hasTable && (

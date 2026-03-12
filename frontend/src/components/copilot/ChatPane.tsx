@@ -164,10 +164,10 @@ export function ChatPane() {
                 <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
               )}
               {msg.role === 'agent' && msg.insightData && msg.status === 'done' &&
-                (msg.insightData.rows.length > 1 || msg.insightData.vega_spec) && (
+                (msg.insightData.rows.length > 1 || msg.insightData.chart_meta) && (
                 <InlineArtifact
                   insight={msg.insightData}
-                  compact={!msg.insightData.vega_spec && !msg.insightData.recommended_actions?.length}
+                  compact={!msg.insightData.chart_meta && !msg.insightData.recommended_actions?.length}
                   onExpand={() => handleCardClick(msg.insightData!)}
                 />
               )}

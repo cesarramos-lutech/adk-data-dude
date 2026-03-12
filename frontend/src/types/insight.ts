@@ -1,12 +1,19 @@
 export type CardType = 'metric' | 'chart' | 'narrative';
 
+export interface ChartMeta {
+  chart_type: 'bar' | 'line' | 'scatter' | 'pie' | 'table';
+  x_col?: string;
+  y_col?: string;
+  title?: string;
+  data?: Record<string, unknown>[];
+}
+
 export interface InsightCard {
   id: string;
   type: CardType;
   headline: string;
   narrative: string;
-  /** Vega-Lite spec JSON object when type === 'chart' */
-  chartSpec?: Record<string, unknown>;
+  chart_meta?: ChartMeta;
   /** For metric cards: the hero number */
   metricValue?: string;
   /** For metric cards: percentage or absolute delta */
@@ -49,8 +56,7 @@ export interface ApiInsight {
   key_points?: string[];
   recommended_actions?: string[];
   visualization_mode?: 'chart' | 'narrative';
-  /** Vega-Lite spec from build_dashboard tool */
-  vega_spec?: Record<string, unknown>;
+  chart_meta?: ChartMeta;
 }
 
 export type SqlStatus =

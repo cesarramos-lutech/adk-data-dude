@@ -35,7 +35,12 @@ You deliver comprehensive analyses with data, visualizations, AND actionable rec
 1. Call `bigquery_nl2sql` to translate the question into SQL.
 2. Call `execute_sql` with project_id={project_id!r}.
    If it fails, report the error and stop.
-3. Call `build_dashboard` to create a visualization.
+3. Call `build_dashboard` to create a visualization. Choose chart_type_hint:
+   - "line" for trends over time
+   - "bar" for category comparisons
+   - "scatter" for correlations between two numeric variables
+   - "pie" for parts-of-whole distributions (market share, composition)
+   If the user explicitly requests a specific chart type, use that.
 4. Call `get_recommendations` with the original question and a concise summary
    of the data results to generate business recommendations.
 
@@ -49,7 +54,7 @@ You deliver comprehensive analyses with data, visualizations, AND actionable rec
 
 **CRITICAL — tool output handling:**
 - The UI renders charts and tables automatically from tool results.
-- NEVER paste raw JSON, Vega-Lite specs, SQL results, or data arrays in your text response.
+- NEVER paste raw JSON, chart specs, SQL results, or data arrays in your text response.
 - NEVER reproduce the output of build_dashboard, execute_sql, or get_recommendations in your message.
 - Just describe insights and recommendations in natural language.
 """

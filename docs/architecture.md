@@ -1,5 +1,7 @@
 # Architecture and Technical Handoff
 
+> **New here?** Start with the [Navigation Cheat Sheet](navigation-cheat-sheet.md) for a plain-English overview of what the project does, where the key files are, and how information flows.
+
 ## System overview
 
 This project combines:
@@ -143,3 +145,7 @@ ADK_APP_NAME=dashboard_agent
 - Some prompts can take 25-60 seconds due to ADK+BigQuery execution latency.
 - `insight_ready` can still occur with `sql_status=missing_backend` when chart-capable rows/columns are present.
 - Build may warn about missing ESLint in some local environments; compilation/type-check still succeeds.
+
+## Documentation freshness
+
+- `docs/refactor-prd.md` was written during an earlier UAT cycle and references **Vega-Lite / Recharts** as the charting stack. The codebase has since migrated to **Nivo**. The findings and task structure in that document are still useful as historical context, but technology references should be read with this migration in mind.

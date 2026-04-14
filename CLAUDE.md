@@ -1,4 +1,4 @@
-# CLAUDE.md — Lessons Learned: ADK Playground Agent
+# CLAUDE.md — Lessons Learned: Data Dude Agent
 
 ## ADK Tool Signature Rules
 
@@ -46,7 +46,7 @@ from .agent import root_agent
 
 ## .env Setup
 
-The agent needs these variables in `playground/.env`:
+The agent needs these variables in `.env`:
 
 ```
 BQ_COMPUTE_PROJECT_ID=your-gcp-project
@@ -54,7 +54,7 @@ GOOGLE_CLOUD_PROJECT=your-gcp-project
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json  # or use ADC
 ```
 
-Run `adk web` from the `playground/` directory so it picks up `.env` automatically.
+Run `adk web` from the `adk-data-dude/` directory so it picks up `.env` automatically.
 
 ---
 

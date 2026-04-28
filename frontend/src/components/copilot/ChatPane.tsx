@@ -7,6 +7,7 @@ import { sendChatStream } from '@/src/services/chatApi';
 import { InlineArtifact } from './InlineArtifact';
 import { InsightRecommendation } from './InsightRecommendation';
 import { TypingIndicator } from './TypingIndicator';
+import { RequestProgress } from './RequestProgress';
 
 export function ChatPane() {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -16,6 +17,7 @@ export function ChatPane() {
     addUserMessage,
     setAgentMessage,
     startRequest,
+    setStatusPhase,
     applyResponseState,
     failRequest,
     clearError,
@@ -26,6 +28,8 @@ export function ChatPane() {
     trackSession,
     activeSessionId,
     uiHints,
+    statusPhase,
+    phaseTrace,
   } = useCopilotStore();
 
   useEffect(() => {
@@ -43,7 +47,9 @@ export function ChatPane() {
       onTextDelta: (text) => {
         setAgentMessage(text, 'loading');
       },
-      onPhase: () => {},
+      onPhase: (phase) => {
+        setStatusPhase(phase);
+      },
       onDone: (res) => {
         setAgentMessage(res.agent_message, 'done', res.insight ?? null);
         applyResponseState({
@@ -110,14 +116,13 @@ export function ChatPane() {
               <span className="text-sm font-medium text-[var(--text)]">Data Dude</span>
             </div>
             <p className="text-[var(--text-muted)] text-xs text-center max-w-[280px]">
-              I can query your data, generate charts, and spot patterns. Try asking:
+              Ask a question, get a trusted answer, and save the insight.
             </p>
             <div className="w-full space-y-1.5">
               {[
-                'What data do we have?',
-                'Show me monthly revenue trend',
-                'Top 10 products by revenue',
-                'Full analysis of customer retention',
+                'Explore my data',
+                'Create a chart',
+                'Find opportunities',
               ].map((suggestion) => (
                 <button
                   key={suggestion}
@@ -159,9 +164,17 @@ export function ChatPane() {
               }`}
             >
               {msg.status === 'loading' && !msg.content ? (
-                <TypingIndicator />
+                <>
+                  <TypingIndicator />
+                  <RequestProgress phase={statusPhase} phaseTrace={phaseTrace} />
+                </>
               ) : (
-                <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                <>
+                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  {msg.status === 'loading' && (
+                    <RequestProgress phase={statusPhase} phaseTrace={phaseTrace} />
+                  )}
+                </>
               )}
               {msg.role === 'agent' && msg.insightData && msg.status === 'done' &&
                 (msg.insightData.rows.length > 1 || msg.insightData.chart_meta) && (
@@ -185,6 +198,7 @@ export function ChatPane() {
             </div>
             <div className="rounded-lg px-3 py-2 bg-[var(--agent-bubble)]">
               <TypingIndicator />
+              <RequestProgress phase={statusPhase} phaseTrace={phaseTrace} />
             </div>
           </div>
         )}
@@ -193,7 +207,7 @@ export function ChatPane() {
       <div className="shrink-0 p-4 border-t border-[var(--border)]">
         {lastError && (
           <div className="mb-2 rounded-md border border-red-900/40 bg-red-900/20 px-3 py-2 text-xs text-red-200 flex items-center justify-between gap-2">
-            <span className="truncate">Request failed: {lastError}</span>
+            <span className="truncate">{lastError}</span>
             <button
               type="button"
               onClick={handleRetry}

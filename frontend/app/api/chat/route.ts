@@ -3,6 +3,8 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import type {
   ApiInsight,
   ChartMeta,
+  QueryAudit,
+  QueryErrorCategory,
   ResponseMeta,
   ResponseType,
   SqlStatus,
@@ -208,6 +210,28 @@ function extractSqlFromPayload(payload: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function extractQueryAuditFromPayload(payload: unknown): QueryAudit | undefined {
+  if (!isRecord(payload)) return undefined;
+  const audit = payload.query_audit;
+  return isRecord(audit) ? audit as QueryAudit : undefined;
+}
+
+function extractQueryAuditFromEvents(events: AdkEvent[]): QueryAudit | undefined {
+  let latest: QueryAudit | undefined;
+  for (const event of events) {
+    const delta = event.actions?.stateDelta;
+    if (delta && isRecord(delta.query_audit)) {
+      latest = delta.query_audit as QueryAudit;
+    }
+    for (const part of event.content?.parts ?? []) {
+      if (!isAdkPart(part)) continue;
+      const audit = extractQueryAuditFromPayload(parseJsonStringMaybe(part.functionResponse?.response));
+      if (audit) latest = audit;
+    }
+  }
+  return latest;
+}
+
 function extractColumnsFromPayload(payload: unknown): string[] {
   if (!isRecord(payload)) return [];
   if (Array.isArray(payload.columns) && payload.columns.every((c) => typeof c === 'string')) {
@@ -378,6 +402,15 @@ function extractNarrativeFromPayload(payload: unknown): {
   return { insight_summary, key_points, recommended_actions };
 }
 
+function extractBestNarrative(candidates: InsightCandidate[]): ReturnType<typeof extractNarrativeFromPayload> {
+  const narratives = candidates.map((candidate) => extractNarrativeFromPayload(candidate.payload));
+  return narratives.reduce<ReturnType<typeof extractNarrativeFromPayload>>((best, current) => {
+    const bestScore = (best.key_points?.length ?? 0) + (best.recommended_actions?.length ?? 0) + (best.insight_summary ? 1 : 0);
+    const currentScore = (current.key_points?.length ?? 0) + (current.recommended_actions?.length ?? 0) + (current.insight_summary ? 1 : 0);
+    return currentScore > bestScore ? current : best;
+  }, {});
+}
+
 function isSqlRedacted(payload: unknown, sql: string): boolean {
   if (/\[redacted\]/i.test(sql)) return true;
   if (!isRecord(payload)) return false;
@@ -446,7 +479,8 @@ function buildInsightFromCandidate(
   prompt: string,
   text: string,
   candidate: InsightCandidate | null,
-  globalSql: string = ''
+  globalSql: string = '',
+  globalAudit?: QueryAudit,
 ): { insight: ApiInsight | null; confidence: UiHints['confidence'] } {
   const fallbackSql = globalSql || extractSql(text);
 
@@ -470,6 +504,7 @@ function buildInsightFromCandidate(
         sql_query: sql,
         sql_status,
         sql_status_reason,
+        query_audit: globalAudit,
         columns: [],
         rows: [],
         suggested_chart_type: 'table',
@@ -484,6 +519,7 @@ function buildInsightFromCandidate(
   const payloadColumns = extractColumnsFromPayload(candidate.payload);
   const columns = payloadColumns.length > 0 ? payloadColumns : Object.keys(rows[0] ?? {});
   const payloadSql = extractSqlFromPayload(candidate.payload) || globalSql;
+  const query_audit = extractQueryAuditFromPayload(candidate.payload) ?? globalAudit;
   const { sql, status: sql_status, reason: sql_status_reason } = resolveSqlStatus(
     candidate.payload,
     payloadSql,
@@ -510,6 +546,7 @@ function buildInsightFromCandidate(
       sql_query: sql,
       sql_status,
       sql_status_reason,
+      query_audit,
       columns,
       rows,
       suggested_chart_type: inferChartType(columns, rows),
@@ -688,6 +725,7 @@ function extractChartMeta(events: AdkEvent[]): ChartMeta | null {
 
 function phaseFromTool(toolName: string): StatusPhase {
   const lower = toolName.toLowerCase();
+  if (lower.includes('recommend') || lower.includes('summary') || lower.includes('summar')) return 'finalizing';
   if (lower.includes('sql') || lower.includes('query') || lower.includes('bigquery')) return 'querying';
   if (lower.includes('chart') || lower.includes('dashboard') || lower.includes('visual')) return 'visualizing';
   return 'thinking';
@@ -759,17 +797,47 @@ function buildUiHints(
 ): UiHints {
   const isInsight = responseType === 'insight_ready';
   const isNarrativePartial = responseType === 'insight_partial';
-  const suggestPin = (isInsight || isNarrativePartial) && !!(
+  const hasSaveableSummary = !!insight?.insight_summary?.trim();
+  const isSaveableResponse = responseType !== 'answer' && responseType !== 'message_only';
+  const pinAllowed = isInsight || isNarrativePartial || (hasSaveableSummary && isSaveableResponse);
+  const suggestPin = pinAllowed && !!(
+    insight?.insight_summary?.trim() ||
     (insight?.key_points?.length ?? 0) >= 2 ||
     (insight?.recommended_actions?.length ?? 0) >= 1
   );
   return {
     auto_open_insight: isInsight && confidence !== 'low',
-    pin_allowed: isInsight || isNarrativePartial,
+    pin_allowed: pinAllowed,
     confidence,
     narrative_sql_validated: narrativeSqlValidated,
     suggest_pin: suggestPin,
   };
+}
+
+function classifyErrorMessage(message: string): QueryErrorCategory {
+  const lower = (message || '').toLowerCase();
+  if (lower.includes('syntax error') || lower.includes('invalid query') || lower.includes('parse error')) return 'sql_syntax';
+  if (lower.includes('not found') || lower.includes('404')) return 'not_found';
+  if (lower.includes('permission') || lower.includes('access denied') || lower.includes('403')) return 'permission';
+  if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('deadline')) return 'timeout';
+  if (lower.includes('missing') || lower.includes('environment variable') || lower.includes('credentials')) return 'config';
+  if (lower.includes('unavailable') || lower.includes('failed to create adk session') || lower.includes('503')) return 'backend_unavailable';
+  return 'unknown';
+}
+
+function userFriendlyError(message: string): { message: string; category: QueryErrorCategory } {
+  const category = classifyErrorMessage(message);
+  const friendly: Record<QueryErrorCategory, string> = {
+    sql_syntax: 'The generated SQL failed. Review the query or ask me to simplify it.',
+    not_found: 'I could not find one of the requested tables or fields. Try asking what data is available.',
+    permission: 'I do not have permission to access the required data.',
+    timeout: 'This took longer than expected. Try again with a narrower question.',
+    empty_result: 'No rows matched those filters. Try a wider date range or broader criteria.',
+    backend_unavailable: 'I could not reach the data agent. Try again in a moment.',
+    config: 'The data agent is missing required configuration.',
+    unknown: 'I could not complete this request. Try again or simplify the question.',
+  };
+  return { message: friendly[category], category };
 }
 
 async function parseAdkResponse(res: Response): Promise<unknown> {
@@ -911,12 +979,13 @@ export async function POST(request: NextRequest) {
     } catch (sessionErr) {
       sessionsByBrowser.delete(browserId);
       console.error('Session creation failed:', sessionErr);
-      const errMsg = sessionErr instanceof Error ? sessionErr.message : 'Backend unavailable';
+      const rawErrMsg = sessionErr instanceof Error ? sessionErr.message : 'Backend unavailable';
+      const friendly = userFriendlyError(rawErrMsg);
       return NextResponse.json(
         {
           status: 'error',
           response_type: 'error',
-          error: errMsg,
+          error: friendly.message,
           status_phase: 'finalizing',
           phase_trace: ['thinking', 'finalizing'],
           ui_hints: { auto_open_insight: false, pin_allowed: false, confidence: 'low' as const },
@@ -925,6 +994,7 @@ export async function POST(request: NextRequest) {
             elapsed_ms: Date.now() - start,
             app_name: PINNED_APP_NAME ?? 'dashboard_agent',
             session_id: '',
+            error_category: friendly.category,
           },
         },
         { status: 503 }
@@ -1013,9 +1083,15 @@ export async function POST(request: NextRequest) {
           const phaseTrace = extractPhaseTrace(events);
           const agentMessage = extractAgentText(events);
           const globalSql = extractSqlFromAllEvents(events);
-          const bestCandidate = selectBestCandidate(extractCandidates(events));
-          let { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate, globalSql);
+          const candidates = extractCandidates(events);
+          const bestCandidate = selectBestCandidate(candidates);
+          const globalAudit = extractQueryAuditFromEvents(events);
+          let { insight, confidence } = buildInsightFromCandidate(prompt, agentMessage, bestCandidate, globalSql, globalAudit);
           if (insight) {
+            const bestNarrative = extractBestNarrative(candidates);
+            insight.insight_summary = bestNarrative.insight_summary ?? insight.insight_summary;
+            insight.key_points = bestNarrative.key_points ?? insight.key_points;
+            insight.recommended_actions = bestNarrative.recommended_actions ?? insight.recommended_actions;
             const chartMeta = extractChartMeta(events);
             if (chartMeta) {
               insight.chart_meta = chartMeta;
@@ -1058,16 +1134,17 @@ export async function POST(request: NextRequest) {
             meta,
           });
         } catch (streamErr) {
-          const message = streamErr instanceof Error ? streamErr.message : 'Stream error';
+          const rawMessage = streamErr instanceof Error ? streamErr.message : 'Stream error';
+          const friendly = userFriendlyError(rawMessage);
           sendSSE({
             type: 'done',
             status: 'error',
             response_type: 'error',
-            error: message,
+            error: friendly.message,
             status_phase: 'finalizing',
             phase_trace: ['thinking', 'finalizing'],
             ui_hints: { auto_open_insight: false, pin_allowed: false, confidence: 'low', suggest_pin: false },
-            meta: { request_id: requestId, elapsed_ms: Date.now() - start, app_name: session.appName, session_id: session.sessionId },
+            meta: { request_id: requestId, elapsed_ms: Date.now() - start, app_name: session.appName, session_id: session.sessionId, error_category: friendly.category },
           });
         } finally {
           controller.close();
@@ -1085,12 +1162,13 @@ export async function POST(request: NextRequest) {
     return new Response(stream, { headers });
   } catch (err) {
     console.error('POST /api/chat error:', err);
-    const message = err instanceof Error ? err.message : 'Internal server error';
+    const rawMessage = err instanceof Error ? err.message : 'Internal server error';
+    const friendly = userFriendlyError(rawMessage);
     const response = NextResponse.json(
       {
         status: 'error',
         response_type: 'error',
-        error: message,
+        error: friendly.message,
         status_phase: 'finalizing',
         phase_trace: ['thinking', 'finalizing'],
         ui_hints: {
@@ -1103,6 +1181,7 @@ export async function POST(request: NextRequest) {
           elapsed_ms: Date.now() - start,
           app_name: PINNED_APP_NAME ?? 'dashboard_agent',
           session_id: '',
+          error_category: friendly.category,
         },
       },
       { status: 500 }

@@ -34,6 +34,8 @@ def _instructions() -> str:
   or describe a table. Use execute_sql with project_id={project_id!r}.
 - If the user asks a simple factual question (counts, single numbers, yes/no), write
   a concise SQL and use `execute_sql` to retrieve the answer.
+- Keep SQL minimal: use the fewest tables needed, avoid JOINs unless necessary,
+  select only required columns, and add a conservative LIMIT for list-style answers.
 
 **Response style:**
 - Be conversational and concise. Answer in 1-3 sentences.

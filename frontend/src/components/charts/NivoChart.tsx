@@ -202,7 +202,7 @@ function NivoLine({ rows, xKey, yKey, compact }: SubChartProps) {
         <div className="bg-gray-800 border border-gray-700 px-3 py-2 rounded-md shadow-lg text-xs">
           <strong className="text-gray-200">{String(point.data.x)}</strong>
           <br />
-          <span className="text-gray-400">{point.serieId}:</span>{' '}
+          <span className="text-gray-400">{point.seriesId}:</span>{' '}
           <span className="text-white">{typeof point.data.y === 'number' ? point.data.y.toLocaleString() : point.data.y}</span>
         </div>
       )}

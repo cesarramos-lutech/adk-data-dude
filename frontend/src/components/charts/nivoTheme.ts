@@ -1,5 +1,3 @@
-import type { Theme } from '@nivo/core';
-
 export const CHART_COLORS = [
   '#3b82f6', // blue-500
   '#10b981', // emerald-500
@@ -11,7 +9,7 @@ export const CHART_COLORS = [
   '#f97316', // orange-500
 ];
 
-export const darkTheme: Theme = {
+export const darkTheme = {
   background: 'transparent',
   text: {
     fontSize: 11,

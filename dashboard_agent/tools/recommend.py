@@ -36,14 +36,36 @@ def _get_env_var(var_name: str) -> str:
 
 def get_recommendations(
     question: str,
-    query_result_summary: str,
     tool_context: ToolContext | None = None,
 ) -> str:
-    """Return 2–3 bullet business recommendations based on the user question and query result summary.
+    """Return 2–3 bullet business recommendations based on rows stored in session state.
 
     Uses Vertex Gemini (same project/location as agent). All config from env.
     """
     logger.debug("get_recommendations - question: %s", question[:80] if question else "")
+    if tool_context is None:
+        raise RuntimeError("get_recommendations requires ToolContext — ADK should inject this automatically")
+
+    rows = tool_context.state.get("bigquery_query_result", [])
+    error = tool_context.state.get("bigquery_query_error", "")
+    if not isinstance(rows, list):
+        rows = []
+
+    capped_rows = rows[:50]
+    data_summary = {
+        "row_count": len(rows),
+        "sample_rows": capped_rows,
+        "query_error": error,
+    }
+
+    if error or not rows:
+        fallback = {
+            "insight_summary": "No grounded recommendations are available because the query returned no usable rows.",
+            "key_points": ["No usable query rows were available."],
+            "recommended_actions": ["Broaden the question or check the query audit."],
+        }
+        return json.dumps(fallback)
+
     vertex_project = _get_env_var("GOOGLE_CLOUD_PROJECT")
     location = _get_env_var("GOOGLE_CLOUD_LOCATION")
     model_name = os.getenv("ROOT_AGENT_MODEL", "gemini-2.5-pro")
@@ -63,7 +85,7 @@ def get_recommendations(
 
 **User question:** {question}
 
-**Data summary:** {query_result_summary}"""
+**Data rows summary:** {json.dumps(data_summary, default=str)}"""
     try:
         response = client.models.generate_content(
             model=model_name,

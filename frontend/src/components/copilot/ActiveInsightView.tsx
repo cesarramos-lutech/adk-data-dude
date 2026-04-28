@@ -89,7 +89,7 @@ export function ActiveInsightView() {
     if (!currentInsight) return;
     pinInsightToBoard(currentInsight);
     setJustPinned(true);
-    toastManager.show('Added to board', 'success');
+    toastManager.show('Insight saved to board', 'success');
     setTimeout(() => setJustPinned(false), 2000);
   };
 
@@ -164,7 +164,7 @@ export function ActiveInsightView() {
               className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-green-900/30 text-green-400 hover:bg-green-900/40 transition-colors"
             >
               <Check className="w-4 h-4" />
-              On board
+              Saved
             </button>
           ) : (
             <button
@@ -173,7 +173,7 @@ export function ActiveInsightView() {
               className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors"
             >
               <Pin className="w-4 h-4" />
-              Pin to board
+              Save insight
             </button>
           )}
         </div>

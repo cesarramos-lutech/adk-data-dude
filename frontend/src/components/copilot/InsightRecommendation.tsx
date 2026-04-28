@@ -37,7 +37,7 @@ export function InsightRecommendation({ insight }: InsightRecommendationProps) {
     };
     pinInsightToBoard(condensed, 'narrative');
     setJustPinned(true);
-    toastManager.show('Insight pinned to board', 'success');
+    toastManager.show('Insight saved to board', 'success');
     setTimeout(() => setJustPinned(false), 2500);
   };
 
@@ -74,7 +74,7 @@ export function InsightRecommendation({ insight }: InsightRecommendationProps) {
               className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-green-900/30 text-green-400 hover:bg-green-900/40 transition-colors"
             >
               <Check className="w-3 h-3" />
-              Pinned
+              Saved
             </button>
           ) : (
             <button
@@ -83,7 +83,7 @@ export function InsightRecommendation({ insight }: InsightRecommendationProps) {
               className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-amber-700/30 text-amber-300 hover:bg-amber-700/50 transition-colors"
             >
               <Pin className="w-3 h-3" />
-              Pin insight
+              Save insight
             </button>
           )}
         </div>

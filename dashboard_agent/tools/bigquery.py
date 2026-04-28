@@ -9,6 +9,8 @@ from google.cloud import bigquery
 from google.genai import Client
 from google.genai.types import HttpOptions
 
+from dashboard_agent.tools.query_audit import build_query_audit
+
 USER_AGENT = "playground-dashboard-agent"
 MAX_NUM_ROWS = 10000
 
@@ -101,11 +103,18 @@ def bigquery_nl2sql(question: str, tool_context: ToolContext) -> str:
         http_options=HttpOptions(headers={"user-agent": USER_AGENT}),
     )
 
-    prompt = f"""You are a BigQuery SQL expert. Generate a single BigQuery SQL statement (Google SQL dialect).
+    prompt = f"""You are a BigQuery SQL expert. Generate the simplest correct BigQuery SQL statement (Google SQL dialect).
 
 CONSTRAINT: ONLY use tables from `{data_project}.{dataset_id}`. Never reference any other dataset or project.
 Use fully-qualified table names in backticks, e.g. `{data_project}.{dataset_id}.table_name`.
 Limit result rows to at most {MAX_NUM_ROWS}.
+
+Simplicity rules:
+- Prefer aggregate queries over raw detail rows when the question asks for totals, trends, rankings, or comparisons.
+- Avoid JOINs unless the question cannot be answered from one table.
+- For top-N questions, include ORDER BY and a conservative LIMIT.
+- For time-series questions, aggregate by the requested period.
+- Select only the columns needed to answer the question. Do not use SELECT *.
 
 Schema:
 {schema}
@@ -125,4 +134,8 @@ Return only the SQL — no markdown fences, no explanation."""
 
     # Store in state so the agent can pass it to execute_sql
     tool_context.state["sql_query"] = sql
+    tool_context.state["query_audit"] = build_query_audit(
+        sql,
+        compute_project_id=db.get("compute_project_id", ""),
+    )
     return sql

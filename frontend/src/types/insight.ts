@@ -47,6 +47,7 @@ export interface ApiInsight {
   sql_query: string;
   sql_status?: SqlStatus;
   sql_status_reason?: string;
+  query_audit?: QueryAudit;
   columns: string[];
   rows: Record<string, unknown>[];
   suggested_chart_type?: string;
@@ -64,6 +65,35 @@ export type SqlStatus =
   | 'missing_backend'
   | 'derived_from_text'
   | 'redacted';
+
+export type QueryComplexity = 'simple' | 'moderate' | 'complex' | 'unknown';
+
+export type QueryErrorCategory =
+  | 'sql_syntax'
+  | 'not_found'
+  | 'permission'
+  | 'timeout'
+  | 'empty_result'
+  | 'backend_unavailable'
+  | 'config'
+  | 'unknown';
+
+export interface QueryAudit {
+  sql?: string;
+  referenced_tables?: string[];
+  join_count?: number;
+  has_limit?: boolean;
+  limit_value?: number | null;
+  complexity?: QueryComplexity;
+  estimated_bytes?: number | null;
+  estimated_mb?: number | null;
+  cost_note?: string;
+  warnings?: string[];
+  error_category?: QueryErrorCategory;
+  error_message?: string;
+  job_id?: string;
+  elapsed_ms?: number;
+}
 
 export type ResponseType =
   | 'message_only'
@@ -91,4 +121,5 @@ export interface ResponseMeta {
   elapsed_ms: number;
   app_name: string;
   session_id: string;
+  error_category?: QueryErrorCategory;
 }

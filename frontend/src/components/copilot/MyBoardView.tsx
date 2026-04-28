@@ -10,7 +10,7 @@ export function MyBoardView() {
   const { pinnedBoardItems, clearBoardWithUndoWindow, restoreClearedBoard } = useCopilotStore();
   const [presenting, setPresenting] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
-  const clearTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const exitPresent = useCallback(() => setPresenting(false), []);
 
@@ -29,7 +29,7 @@ export function MyBoardView() {
       clearTimerRef.current = setTimeout(() => setConfirmingClear(false), 3000);
       return;
     }
-    clearTimeout(clearTimerRef.current);
+    if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
     setConfirmingClear(false);
     clearBoardWithUndoWindow(10000);
     toastManager.show({

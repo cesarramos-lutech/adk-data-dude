@@ -62,6 +62,7 @@ interface CopilotState {
   addUserMessage: (content: string) => void;
   setAgentMessage: (content: string, status: 'loading' | 'done', insightData?: ApiInsight | null) => void;
   startRequest: (prompt: string) => void;
+  setStatusPhase: (phase: StatusPhase) => void;
   applyResponseState: (payload: {
     responseType: ResponseType;
     statusPhase?: StatusPhase;
@@ -191,6 +192,15 @@ export const useCopilotStore = create<CopilotState>((set) => ({
       lastPrompt: prompt,
       lastError: null,
     }),
+
+  setStatusPhase: (phase) =>
+    set((state) => ({
+      statusPhase: phase,
+      phaseTrace:
+        state.phaseTrace[state.phaseTrace.length - 1] === phase
+          ? state.phaseTrace
+          : [...state.phaseTrace, phase],
+    })),
 
   applyResponseState: ({ responseType, statusPhase, phaseTrace, uiHints, meta, insight }) =>
     set((state) => {

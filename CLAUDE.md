@@ -60,11 +60,37 @@ Run `adk web` from the `adk-data-dude/` directory so it picks up `.env` automati
 
 ## Port Conflict Note
 
-If `adk web` fails with "address already in use":
+Canonical local ports for this project:
+
+- ADK backend: `8081`
+- Frontend (Next.js): `3000`
+
+When running `adk-data-dude` together with `ADK_DYNAMIC_DASHBOARD`, keep this project's ports fixed (`8081` + `3000`) and move the other project to `8080` + `3001`.
+
+Do not rely on ADK defaults; always set backend port explicitly:
 
 ```bash
-lsof -ti:8080 | xargs kill -9
-adk web --port 8080
+adk web --port 8081
 ```
 
-Or use a different port: `adk web --port 8081`.
+If startup fails with "address already in use":
+
+```bash
+lsof -ti:3000,8081 | xargs kill -9
+adk web --port 8081
+```
+
+Preflight check:
+
+```bash
+lsof -nP -iTCP:3000 -iTCP:8081 -sTCP:LISTEN
+```
+
+---
+
+## Built-in tools in sub-agents
+
+Before introducing or refactoring multi-agent routing, verify current ADK docs for built-in tool limitations.
+
+- Avoid placing ADK built-in tools inside `sub_agents` unless docs explicitly support that exact pattern/tool.
+- Prefer root-level composition patterns recommended by ADK for mixed tool orchestration.

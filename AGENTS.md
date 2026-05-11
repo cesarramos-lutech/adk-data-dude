@@ -1,3 +1,8 @@
+---
+description: 
+alwaysApply: true
+---
+
 # AGENTS.md — adk-data-dude
 
 ## ADK source of truth
